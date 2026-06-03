@@ -1,0 +1,18 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Mono/C# (на случай будущего)
+.mono/
+data_*/
+mono_crash.*.json
+
+# Экспортные сборки
+/builds/
+/export/
+export_presets.cfg
+
+# ОС / редактор
+.DS_Store
+Thumbs.db
+*.tmp
