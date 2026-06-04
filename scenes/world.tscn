@@ -115,6 +115,9 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 2, -14)
 [node name="MeshInstance3D" type="MeshInstance3D" parent="Props/Box2" unique_id=517286116]
 mesh = SubResource("BoxMesh2")
 
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Props/Box2/MeshInstance3D" unique_id=1270329816]
+mesh = SubResource("BoxMesh2")
+
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Props/Box2" unique_id=917181870]
 shape = SubResource("BoxShape2")
 

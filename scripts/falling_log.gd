@@ -20,6 +20,25 @@ var down_linear_damp: float = 0.5
 var roll_damp: float = 6.0
 var kill_radius: float = 1.1
 var kill_speed: float = 2.5
+var damage_scale: float = 0.15
+var hit_cooldown: float = 0.6
+# Скорость в расчёте урона обрезаем сверху — иначе разовый «выброс» скорости при
+# раскладке/расталкивании кусков (penetration) даёт фиктивный мгновенный смертельный удар.
+var max_damage_speed: float = 10.0
+# После спавна/укладки/броска бревно НЕ наносит урон столько секунд: гасит мнимые удары
+# от оседания (бревно дёрнулось на 1 кадр у самых ног — это не должно убивать).
+var damage_arm_delay: float = 0.4
+# Отступ (м) от КАЖДОГО торца, в пределах которого бревно НЕ наносит урон. Стоя вплотную к
+# рубящемуся стволу, игрок касается края сруба (нижний торец) — этот край при падении задевает
+# его и убивает. Урезаем «смертельный» отрезок с концов: торцы (включая срез) не бьют, а опасная
+# СЕРЕДИНА/верх падающего бревна — бьют как раньше.
+var hit_end_margin: float = 0.35
+# Трение бревна НА ВРЕМЯ ВОЛОКА (обычное — 1.0). Меньше — легче тащить (лежащий конец
+# скользит); слишком мало — бревно «катается» само. По end_drag вернётся к исходному.
+var drag_friction: float = 0.3
+# Максимальная скорость ПОДЪЁМА (м/с) схваченного торца при волоке. Низкая — торец встаёт к
+# рукам плавно, без «прыжка наверх», когда из-под бревна убрали груз кучи.
+var drag_max_rise: float = 1.2
 
 enum State { FALLING, DOWN }
 var _state: State = State.FALLING
@@ -29,10 +48,23 @@ var _fall_axis: Vector3 = Vector3.ZERO
 var _fall_direction: Vector3 = Vector3.ZERO
 # Сколько ствол почти не вращается — признак, что он лёг/упёрся.
 var _rest_timer: float = 0.0
-var _player_killed: bool = false
+# Отсчёт паузы между ударами по игроку (см. hit_cooldown).
+var _dmg_cd: float = 0.0
+# Отсчёт «взвода» урона после спавна/укладки (см. damage_arm_delay).
+var _dmg_arm_timer: float = 0.0
+# Бревно тащат волоком: игрок прикладывает к нему тянущую силу, физика остаётся живой.
+var _dragging: bool = false
+# Какой торец схвачен при волоке: 0 (низ) или _length (верх) в локале тела.
+var _grab_end: float = 0.0
+# Исходное трение бревна (физматериал): на время волока временно занижаем, чтобы
+# лежащий конец скользил и бревно реально тащилось, а не «прилипало» к земле.
+var _saved_friction: float = 1.0
 # Длина бревна по локальному Y (0.._length) и масса — для смертельной зоны/урона.
 var _length: float = 1.0
 var _log_mass: float = 1.0
+# Радиус бревна (полутолщина) — чтобы при волоке торец «лежал» на земле поверхностью, а не
+# проваливался центром (см. _drag_ground_clamp).
+var _radius: float = 0.15
 
 # Лежачее бревно можно рубить (растить зарубки) — тем же генератором/накопителем, что и
 # стоячий ствол. Раскол на поленья по добитой точке — пока TODO.
@@ -41,6 +73,11 @@ var _sites: ChopSites
 var _mesh: MeshInstance3D
 var _notch_max_depth: float = 0.3
 var _chips_scene: PackedScene
+
+# Балансовые данные бревна (плотность/вес/замедление) и полный конфиг для пересоздания
+# кусков при расколе — чтобы половинки наследовали все настройки родителя.
+var _log_item: LogItem
+var _spawn_cfg: Dictionary = {}
 
 # Гашение вращения на ВРЕМЯ падения — низкое, чтобы гравитация свободно валила.
 const FALL_ANGULAR_DAMP := 0.1
@@ -67,7 +104,9 @@ func launch(fall_direction: Vector3, length: float, log_mass: float) -> void:
 	# Ось поворота — горизонтальная, перпендикулярная направлению падения.
 	_fall_axis = Vector3.UP.cross(_fall_direction).normalized()
 
-	# Сталкивается со всем твёрдым (пол, стволы, лежащие брёвна, кубы) и с пнями (слой 16/4).
+	# Слой 1|4: лежачее/падающее бревно — это и «обычное твёрдое» (1, видит игрок/рейкасты),
+	# и «бревно» (4). Маска сканирует всё твёрдое: пол/кубы (1), стволы/брёвна (4), пни (16) —
+	# бревно само со всем сталкивается и валится как надо.
 	collision_layer = 1 | 4
 	collision_mask = 1 | 4 | 16
 	continuous_cd = true
@@ -79,6 +118,7 @@ func launch(fall_direction: Vector3, length: float, log_mass: float) -> void:
 	# поэтому здесь для всех одинаково.
 	angular_velocity = _fall_axis * initial_tip_speed
 	add_to_group("falling_log")
+	_dmg_arm_timer = damage_arm_delay
 	_active = true
 
 
@@ -91,6 +131,27 @@ func setup_choppable(gen: ProceduralTrunk, mesh_node: MeshInstance3D, chops_need
 	_sites = ChopSites.new(merge_radius, chops_needed)
 	_notch_max_depth = notch_depth
 	_chips_scene = chips_scene
+
+
+## Балансовые данные бревна (вес/замедление) и полный конфиг для пересоздания кусков при
+## расколе. Зовётся фабрикой spawn() — после него бревно знает свой вес и умеет делиться.
+func setup_item(item: LogItem, cfg: Dictionary, length: float,
+		bottom_r: float, top_r: float) -> void:
+	_log_item = item
+	_spawn_cfg = cfg
+	_length = length
+	var r_avg := (bottom_r + top_r) * 0.5
+	_radius = maxf(bottom_r, top_r)
+	if item:
+		_log_mass = item.mass_for(length, r_avg)
+	else:
+		_log_mass = 850.0 * PI * r_avg * r_avg * length
+	mass = _log_mass
+
+
+## Вес бревна (кг) — для HUD и системы переноски (замедление считает игрок).
+func get_weight() -> float:
+	return _log_mass
 
 
 # Удар по ЛЕЖАЧЕМУ бревну: растим зарубку в точке попадания (тот же путь, что у ствола).
@@ -109,8 +170,11 @@ func chop(chopper_position: Vector3, hit_point: Vector3 = Vector3.INF,
 	var blade := ProceduralTrunk.surface_blade_dir(local_point, local_edge)
 	var site := _sites.add_hit(local_point, power, blade)
 	_rebuild()
+	# Рубка сама по себе толкает бревно (импульс топора) — это НЕ «удар бревна по игроку».
+	# Взводим паузу урона, чтобы дрожь от рубки в упор не списывала HP стоящему рядом игроку.
+	_dmg_arm_timer = damage_arm_delay
 	if _sites.is_felled(site):
-		print("Точка на лежачем бревне добита — тут раскол на полено (TODO).")
+		_split(site)
 
 
 func _rebuild() -> void:
@@ -136,16 +200,198 @@ func _spawn_chips(point: Vector3, chopper_position: Vector3) -> void:
 		chips.look_at(point + dir.normalized(), Vector3.UP)
 
 
+# Фабрика бревна: строит RigidBody с мешом/коллизией, формует слом на нужных торцах,
+# вешает рубку и балансовые данные, ставит в мир по world_xf. НЕ запускает падение —
+# вызывающий сам решает (launch() для падающего, place_resting() для лежащего куска).
+# cfg — словарь параметров (см. tree._log_cfg): материал, зарубки, форма слома, тюнинг.
+static func spawn(parent: Node, cfg: Dictionary, world_xf: Transform3D,
+		length: float, bottom_r: float, top_r: float,
+		ring_factor: float, chop_angle: float,
+		break_bottom: bool, break_top: bool) -> FallingLog:
+	var gen := ProceduralTrunk.new()
+	gen.height = length
+	gen.bottom_radius = bottom_r
+	gen.top_radius = top_r
+	gen.material = cfg.get("material", null)
+	gen.notch_long = cfg.get("notch_long", 0.22)
+	gen.notch_thick = cfg.get("notch_thick", 0.12)
+	if break_bottom or break_top:
+		gen.jagged_bottom = break_bottom
+		gen.jagged_top = break_top
+		gen.jagged_seed = randf() * 100.0
+		gen.rim_bias_angle = chop_angle
+		gen.rim_bias = (1.0 - ring_factor) * cfg.get("break_slant_max", 0.12)
+		gen.tip_cone = ring_factor * cfg.get("break_cone_max", 0.18)
+		gen.splinter_height = cfg.get("break_splinter", 0.14)
+		gen.jagged_amount = cfg.get("break_jagged", 0.04)
+		gen.break_span = cfg.get("break_span", 0.55)
+	var sm := gen.material as StandardMaterial3D
+	if sm:
+		sm.vertex_color_use_as_albedo = true
+
+	var body := FallingLog.new()
+	var pm := PhysicsMaterial.new()
+	pm.friction = 1.0
+	pm.rough = true
+	pm.bounce = 0.15
+	body.physics_material_override = pm
+
+	var mi := MeshInstance3D.new()
+	mi.mesh = gen.build([])
+	mi.position.y = length * 0.5
+	body.add_child(mi)
+
+	var col := CollisionShape3D.new()
+	var cs := CylinderShape3D.new()
+	cs.height = length
+	cs.radius = maxf(bottom_r, top_r)
+	col.shape = cs
+	col.position.y = length * 0.5
+	body.add_child(col)
+
+	# Следим за контактами: нужно, чтобы при подъёме/волоке бревна разбудить лежащие НА нём
+	# куски (спящий RigidBody без толчка зависает в воздухе — см. _wake_resting_bodies).
+	body.contact_monitor = true
+	body.max_contacts_reported = 8
+
+	parent.add_child(body)
+	body.global_transform = world_xf
+
+	# Тюнинг падения/лежания — из конфига (одно место правки на все куски).
+	body.initial_tip_speed = cfg.get("initial_tip_speed", 0.5)
+	body.fall_gravity_scale = cfg.get("fall_gravity_scale", 1.3)
+	body.launch_assist_torque = cfg.get("launch_assist_torque", 20000.0)
+	body.down_angular_damp = cfg.get("down_angular_damp", 0.5)
+	body.down_linear_damp = cfg.get("down_linear_damp", 0.5)
+	body.roll_damp = cfg.get("roll_damp", 6.0)
+	body.kill_radius = cfg.get("kill_radius", 1.1)
+	body.kill_speed = cfg.get("kill_speed", 2.5)
+	body.damage_scale = cfg.get("damage_scale", 0.15)
+	body.hit_cooldown = cfg.get("hit_cooldown", 0.6)
+	body.max_damage_speed = cfg.get("max_damage_speed", 10.0)
+	body.damage_arm_delay = cfg.get("damage_arm_delay", 0.4)
+
+	body.setup_choppable(gen, mi, cfg.get("chops_needed", 5),
+			cfg.get("merge_radius", 0.2), cfg.get("notch_max_depth", 0.3),
+			cfg.get("chips_scene", null))
+	body.setup_item(cfg.get("log_item", null), cfg, length, bottom_r, top_r)
+	return body
+
+
+# Раскол лежачего бревна по добитой точке на ДВА бревна (вдоль длины). Каждая половинка —
+# новое лежачее бревно (тоже рубится и поднимается). Кусок короче min_length исчезает.
+func _split(site) -> void:
+	var total := _length
+	# Высота реза вдоль тела (origin тела — у нижнего торца, ось длины — локальный Y).
+	var cut_y := clampf(total * 0.5 + site.local_pos.y, 0.0, total)
+	var br := _gen.bottom_radius
+	var tr := _gen.top_radius
+	var r_cut := lerpf(br, tr, cut_y / total)
+	var ring := _sites.ring_factor(site)
+	var ang := _sites.mean_angle(site)
+	var min_len := _log_item.min_length if _log_item else 0.18
+
+	# Совсем маленький обрубок делить уже бессмысленно (любой рез даст огрызки короче
+	# min_len, размер почти не убывает) — рассыпаем его в щепки ЦЕЛИКОМ.
+	if total < min_len * 2.0:
+		queue_free()
+		return
+
+	var parent := get_parent()
+	var xf := global_transform
+	var axis_y := xf.basis.y.normalized()
+
+	# Нижняя половина: от торца тела до реза. Свежий слом — сверху.
+	var len_a := cut_y
+	if len_a >= min_len:
+		var pa := FallingLog.spawn(parent, _spawn_cfg, xf, len_a, br, r_cut,
+				ring, ang, false, true)
+		pa.place_resting()
+
+	# Верхняя половина: от реза до верха. Origin сдвигаем на cut_y вдоль оси (+ зазор,
+	# чтобы половинки не пересекались коллизией и не расталкивались). Свежий слом — снизу.
+	var len_b := total - cut_y
+	if len_b >= min_len:
+		var xf_b := xf
+		xf_b.origin = xf * Vector3(0.0, cut_y, 0.0) + axis_y * 0.03
+		var pb := FallingLog.spawn(parent, _spawn_cfg, xf_b, len_b, r_cut, tr,
+				ring, ang, true, false)
+		pb.place_resting()
+
+	queue_free()
+
+
+# Ставит кусок СРАЗУ лежать (после раскола): без падения, но рубится и поднимается.
+func place_resting() -> void:
+	_state = State.DOWN
+	collision_layer = 1 | 4
+	collision_mask = 1 | 4 | 16
+	continuous_cd = true
+	freeze = false
+	gravity_scale = 1.0
+	angular_damp = down_angular_damp
+	linear_damp = down_linear_damp
+	add_to_group("choppable_log")
+	add_to_group("pickup_log")
+	_dmg_arm_timer = damage_arm_delay
+	_active = true
+
+
+# Берём бревно на плечо: вешаем на держатель (камеру), глушим физику и коллизию.
+# hold_xf — поза относительно держателя (левое/правое плечо считает игрок по весу).
+func pick_up(holder: Node3D, hold_xf: Transform3D) -> void:
+	# Сначала будим всё, что лежит НА этом бревне: убираем опору — куски должны посыпаться,
+	# а не висеть в воздухе спящими, пока их кто-нибудь не заденет.
+	_wake_resting_bodies()
+	_active = false
+	freeze = true
+	sleeping = true
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	# Несомое бревно ни с чем не сталкивается и больше не цель для рубки/подбора.
+	collision_layer = 0
+	collision_mask = 0
+	remove_from_group("pickup_log")
+	remove_from_group("choppable_log")
+	remove_from_group("falling_log")
+	get_parent().remove_child(self)
+	holder.add_child(self)
+	transform = hold_xf
+
+
+# Кладём бревно обратно в мир (бросок перед игроком). new_parent — узел сцены,
+# world_pos — куда положить нижний торец, forward — горизонтальное направление длины.
+func drop(new_parent: Node, world_pos: Vector3, forward: Vector3) -> void:
+	get_parent().remove_child(self)
+	new_parent.add_child(self)
+	var y := forward
+	if y.length() < 0.01:
+		y = Vector3.FORWARD
+	y = y.normalized()
+	var x := Vector3.UP.cross(y).normalized()
+	var z := x.cross(y).normalized()
+	# Поднимаем на радиус, чтобы лежачий цилиндр не оказался наполовину в полу.
+	var r := maxf(_gen.bottom_radius, _gen.top_radius) if _gen else 0.3
+	global_transform = Transform3D(Basis(x, y, z), world_pos + Vector3.UP * r)
+	freeze = false
+	sleeping = false
+	place_resting()
+
+
 func _physics_process(delta: float) -> void:
 	if not _active:
 		return
+	if _dmg_cd > 0.0:
+		_dmg_cd -= delta
+	if _dmg_arm_timer > 0.0:
+		_dmg_arm_timer -= delta
 	if _state == State.FALLING:
 		_process_fall(delta)
-		_check_kill()
+		_apply_impact_damage()
 	else:
 		_damp_roll(delta)
 		# Лежачее, но катящееся с горы бревно тоже опасно — проверяем по скорости.
-		_check_kill()
+		_apply_impact_damage()
 
 
 func _process_fall(delta: float) -> void:
@@ -183,6 +429,8 @@ func _detach() -> void:
 	angular_damp = down_angular_damp
 	linear_damp = down_linear_damp
 	add_to_group("choppable_log")
+	# Улёгшееся бревно можно поднять (E). Раскол на брёвна — рубкой (chop → _split).
+	add_to_group("pickup_log")
 
 
 # Гасим ТОЛЬКО качение вокруг длинной оси бревна (его локальный Y) — цилиндр-каток
@@ -196,11 +444,19 @@ func _damp_roll(delta: float) -> void:
 	angular_velocity = w - roll * clampf(roll_damp * delta, 0.0, 1.0)
 
 
-# Смерть = игрок близко к оси бревна И бревно В ЭТОЙ ТОЧКЕ движется быстро.
-func _check_kill() -> void:
-	# Концы бревна: коллизия в локале тела тянется по Y от 0 до _length.
-	var a := to_global(Vector3.ZERO)
-	var b := to_global(Vector3(0.0, _length, 0.0))
+# Урон игроку = масса × скорость бревна В ТОЧКЕ у игрока × damage_scale. Большое+быстрое
+# бьёт насмерть (>100 HP), лёгкое или медленное — почти безвредно. Ниже kill_speed урона
+# нет вовсе. Между ударами одного бревна — пауза hit_cooldown, чтоб не списывало HP покадрово.
+func _apply_impact_damage() -> void:
+	# Бревно на волоке игрок держит сам — оно его не "бьёт"; пауза между ударами и «взвод»
+	# после спавна/укладки тоже глушат урон (иначе оседание куска у ног = мнимая смерть).
+	if _dragging or _dmg_cd > 0.0 or _dmg_arm_timer > 0.0:
+		return
+	# Концы бревна: коллизия в локале тела тянется по Y от 0 до _length. «Смертельный» отрезок
+	# урезаем с обоих концов на hit_end_margin — торцы (в т.ч. край сруба у ног) не бьют.
+	var margin := clampf(hit_end_margin, 0.0, _length * 0.45)
+	var a := to_global(Vector3(0.0, margin, 0.0))
+	var b := to_global(Vector3(0.0, _length - margin, 0.0))
 	var com := to_global(Vector3(0.0, _length * 0.5, 0.0))
 	for player in get_tree().get_nodes_in_group("player"):
 		if not (player is Node3D):
@@ -208,14 +464,36 @@ func _check_kill() -> void:
 		# Берём точку примерно в середине роста игрока, а не у ступней.
 		var p: Vector3 = (player as Node3D).global_position + Vector3.UP * 0.9
 		var closest := _closest_point_on_segment(p, a, b)
-		if p.distance_to(closest) > kill_radius:
+		var to_player := p - closest
+		if to_player.length() > kill_radius:
+			continue
+		# Игрок СТОИТ НА бревне: ближайшая точка бревна заметно НИЖЕ игрока (вектор к игроку
+		# смотрит вверх). Это опора, а не удар — бревно может оседать/наклоняться под ногой и
+		# слегка дёргаться, но давить игрока сверху оно при этом не может. Бьют только удары
+		# сбоку (вектор горизонтален) и сверху (вектор вниз) — их пропускаем дальше.
+		if to_player.length() > 0.01 and to_player.normalized().y > 0.4:
 			continue
 		# Скорость бревна именно в ближайшей к игроку точке оси.
 		var vel := linear_velocity + angular_velocity.cross(closest - com)
-		if vel.length() >= kill_speed:
-			# Будущий урон ∝ кинетике удара (масса × скорость в точке). Пока заглушка.
-			var impact_force := _log_mass * vel.length()
-			_kill_player(impact_force)
+		# «Давящая» скорость: бревно давит ВНИЗ и ВБОК (гравитация работает вниз). Удар СНИЗУ
+		# ВВЕРХ (бревно перевешивает и поднимает свободный конец в игрока) не крушит —
+		# поэтому вертикальную составляющую ВВЕРХ обнуляем.
+		var crush := vel
+		if crush.y > 0.0:
+			crush.y = 0.0
+		# Урон только если давящее движение направлено К игроку, а не ОТ него (стоишь НА конце,
+		# он проваливается вниз ОТ тебя → не бьёт; падает СВЕРХУ / катится В тебя → бьёт).
+		if crush.dot(to_player) <= 0.0:
+			continue
+		var speed := crush.length()
+		if speed < kill_speed:
+			continue
+		# Обрезаем сверху: разовые «выбросы» от расталкивания не должны мгновенно убивать.
+		speed = minf(speed, max_damage_speed)
+		var damage := _log_mass * speed * damage_scale
+		if player.has_method("take_damage"):
+			player.take_damage(damage)
+			_dmg_cd = hit_cooldown
 
 
 func _closest_point_on_segment(p: Vector3, a: Vector3, b: Vector3) -> Vector3:
@@ -227,12 +505,168 @@ func _closest_point_on_segment(p: Vector3, a: Vector3, b: Vector3) -> Vector3:
 	return a + ab * t
 
 
-# impact_force — заглушка под будущую систему урона (масса × скорость). Сейчас любой
-# удар бревна = мгновенная смерть; позже здесь будет вычет HP.
-func _kill_player(impact_force: float = 0.0) -> void:
-	if _player_killed:
+## Будит все динамические тела, КАСАЮЩИЕСЯ этого бревна (что лежит на нём сверху). Зовётся
+## перед тем, как убрать опору (подъём/волок): спящий RigidBody игнорирует гравитацию и без
+## толчка «зависает» в воздухе, когда из-под него забрали бревно. Разбуженные — падают.
+func _wake_resting_bodies() -> void:
+	for other in get_colliding_bodies():
+		if other is RigidBody3D and not (other as RigidBody3D).freeze:
+			(other as RigidBody3D).sleeping = false
+
+
+## Лежит ли на этом бревне сверху другой (незамороженный) кусок? Частые лучи вверх вдоль всего
+## бревна (каждые ~12 см), иначе тонкий верхний кусок проскочит между ними. Маска 4 — только брёвна;
+## стоячий ствол (freeze) отсеиваем. Если да — бревно не «верхнее»: подобрать/тащить его нельзя.
+func is_covered() -> bool:
+	var space := get_world_3d().direct_space_state
+	var reach := _radius * 2.0 + 0.2
+	var n := maxi(4, int(_length / 0.12))
+	for i in range(n + 1):
+		var pt := to_global(Vector3(0.0, _length * float(i) / float(n), 0.0))
+		var q := PhysicsRayQueryParameters3D.create(pt, pt + Vector3.UP * reach)
+		q.exclude = [get_rid()]
+		q.collision_mask = 4
+		var hit := space.intersect_ray(q)
+		if hit.is_empty():
+			continue
+		var col = hit.get("collider")
+		if col is RigidBody3D and (col as RigidBody3D).freeze:
+			continue  # стоячий ствол рядом — это не «лежит сверху»
+		return true
+	return false
+
+
+## Мировая точка схваченного при волоке торца (за неё игрок «держит» бревно).
+func grab_point_world() -> Vector3:
+	return to_global(Vector3(0.0, _grab_end, 0.0))
+
+
+## Мировая точка ДАЛЬНЕГО (лежащего на земле) торца — противоположного схваченному.
+func tail_point_world() -> Vector3:
+	return to_global(Vector3(0.0, _length - _grab_end, 0.0))
+
+
+## Начинает волок: запоминаем БЛИЖНИЙ к игроку торец. Слой 8 — маска игрока его не видит
+## (бревно не толкает игрока), маска 1|4|16 — со всем твёрдым сталкивается.
+func begin_drag(from_world: Vector3) -> void:
+	var a := to_global(Vector3.ZERO)
+	var b := to_global(Vector3(0.0, _length, 0.0))
+	_grab_end = 0.0 if from_world.distance_to(a) <= from_world.distance_to(b) else _length
+	_dragging = true
+	_state = State.DOWN
+	freeze = false
+	sleeping = false
+	gravity_scale = 1.0
+	angular_damp = down_angular_damp
+	linear_damp = down_linear_damp
+	collision_layer = 8
+	collision_mask = 1 | 4 | 16
+	# Трение занижаем на время волока: лежащий конец должен скользить (по end_drag вернём).
+	var pm := physics_material_override as PhysicsMaterial
+	if pm != null:
+		_saved_friction = pm.friction
+		pm.friction = drag_friction
+	remove_from_group("pickup_log")
+	remove_from_group("choppable_log")
+	_dmg_arm_timer = damage_arm_delay
+	_active = true
+
+
+## Тянущая «рука»: подтягиваем схваченный торец к target_world (точка у рук игрока). Поводок
+## ограничивает длину рук, тяга идёт силой за ближний торец, tail_grip «якорит» дальний конец,
+## чтобы бревно поворачивало по радиусу.
+func drag_pull(target_world: Vector3, stiffness: float, damping: float,
+		max_force: float, max_reach: float, tail_grip: float) -> void:
+	if not _dragging:
 		return
-	_player_killed = true
-	print("СМЕРТЬ: игрок под бревном (масса %.0f кг, сила удара %.0f — TODO урон по HP). Перезапуск." \
-		% [_log_mass, impact_force])
-	get_tree().reload_current_scene()
+	sleeping = false
+	var origin := to_global(Vector3.ZERO)
+	var com := to_global(Vector3(0.0, _length * 0.5, 0.0))
+	var grab := grab_point_world()
+	var pivot := to_global(Vector3(0.0, _length - _grab_end, 0.0))
+
+	# Тяга к точке у рук — только силой (телепорт таскал бы бревно сквозь препятствия мимо решателя).
+	var v := linear_velocity + angular_velocity.cross(grab - com)
+	var to_t := target_world - grab
+	var force := (to_t * stiffness - v * damping) * mass
+	if force.length() > max_force:
+		force = force.normalized() * max_force
+	# Силу прикладываем в точку 1/3 пути от центра масс к торцу, а не в сам торец: иначе рычаг
+	# гонит дальний конец в землю (ускорение 2·F/m). Здесь дальний конец вниз не идёт, ближний — вверх.
+	var apply_pt := com + (grab - com) / 3.0
+	apply_force(force, apply_pt - origin)
+
+	# Поводок: торец дальше длины рук — гасим скорость «наружу» (позицию не трогаем, коллизии целы).
+	if to_t.length() > max_reach:
+		var out_dir := -to_t.normalized()
+		var v_out := linear_velocity.dot(out_dir)
+		if v_out > 0.0:
+			linear_velocity -= out_dir * v_out
+
+	# Якорь дальнего торца: гасим только ПОПЕРЕЧНУЮ скорость лежащего конца (вдоль оси не трогаем,
+	# иначе бревно нельзя утащить вдоль себя) — бревно поворачивает по радиусу вокруг него.
+	var axis_h := global_transform.basis.y
+	axis_h.y = 0.0
+	var v_tail := linear_velocity + angular_velocity.cross(pivot - com)
+	v_tail.y = 0.0
+	if axis_h.length() > 0.01:
+		axis_h = axis_h.normalized()
+		v_tail -= axis_h * v_tail.dot(axis_h)
+	if v_tail.length() > 0.001:
+		var tail_force := -v_tail * tail_grip * mass
+		var tail_max := max_force * 0.5
+		if tail_force.length() > tail_max:
+			tail_force = tail_force.normalized() * tail_max
+		apply_force(tail_force, pivot - origin)
+
+	# Лимиты скорости — бревно не должно «выстреливать» (выглядит как телепорт). Вверх режем жёстче.
+	var max_lin := 2.0
+	if linear_velocity.length() > max_lin:
+		linear_velocity = linear_velocity.normalized() * max_lin
+	if linear_velocity.y > drag_max_rise:
+		linear_velocity.y = drag_max_rise
+	var max_ang := 3.0
+	if angular_velocity.length() > max_ang:
+		angular_velocity = angular_velocity.normalized() * max_ang
+
+	_drag_ground_clamp()
+
+
+## Не даёт торцам свободного волочимого бревна провалиться под землю: луч вниз от каждого торца,
+## если поверхность бревна (центр − радиус) ниже земли — выталкиваем вверх и гасим скорость вниз.
+func _drag_ground_clamp() -> void:
+	var space := get_world_3d().direct_space_state
+	var com := to_global(Vector3(0.0, _length * 0.5, 0.0))
+	var worst_lift := 0.0
+	var pen_point := Vector3.ZERO
+	for local_y in [0.0, _length]:
+		var pt := to_global(Vector3(0.0, local_y, 0.0))
+		var q := PhysicsRayQueryParameters3D.create(pt + Vector3.UP * 0.6, pt + Vector3.DOWN * 1.0)
+		q.exclude = [get_rid()]
+		q.collision_mask = 1 | 4 | 16
+		var hit := space.intersect_ray(q)
+		if hit.is_empty():
+			continue
+		var ground_y := (hit["position"] as Vector3).y
+		var lift := ground_y + _radius - pt.y
+		if lift > worst_lift:
+			worst_lift = lift
+			pen_point = pt
+	if worst_lift <= 0.0:
+		return
+	global_position.y += worst_lift
+	var v_pt := linear_velocity + angular_velocity.cross(pen_point - com)
+	if v_pt.y < 0.0:
+		linear_velocity.y -= v_pt.y
+
+
+## Завершает волок: бревно остаётся ТАМ ЖЕ, где было (без телепорта) и снова становится
+## обычным лежачим телом — его можно подобрать/рубить.
+func end_drag() -> void:
+	_dragging = false
+	sleeping = false
+	# Возвращаем исходное трение, заниженное на время волока.
+	var pm := physics_material_override as PhysicsMaterial
+	if pm != null:
+		pm.friction = _saved_friction
+	place_resting()

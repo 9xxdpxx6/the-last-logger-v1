@@ -18,12 +18,13 @@ signal chopped_through(fall_direction: Vector3)
 ## Радиус (м) слияния ударов в одну точку рубки — ВЫСОТНАЯ полоса вдоль оси: удары в её
 ## пределах копятся в один разруб независимо от стороны (рубка по кругу = один руб).
 @export var chop_merge_radius: float = 0.2
-## Максимальная глубина вдавливания зарубки (м) у добитой точки.
-@export var notch_max_depth: float = 0.3
+## Максимальная глубина вдавливания зарубки (м) у добитой точки. Радиус ствола ~0.14 м,
+## поэтому почти добитая зарубка прорезает его почти насквозь.
+@export var notch_max_depth: float = 0.08
 ## Полудлина прорези ВДОЛЬ лезвия топора (м) — насколько широкий разруб делает кромка.
-@export var notch_blade_reach: float = 0.22
+@export var notch_blade_reach: float = 0.12
 ## Полуширина прорези ПОПЕРЁК лезвия (м) — толщина зарубки.
-@export var notch_thickness: float = 0.12
+@export var notch_thickness: float = 0.07
 
 @export_group("Падение бревна")
 ## Начальный толчок (рад/с), задающий сторону падения. Дальше валит гравитация.
@@ -38,23 +39,29 @@ signal chopped_through(fall_direction: Vector3)
 @export var down_linear_damp: float = 0.5
 ## Скорость гашения КАЧЕНИЯ вокруг длинной оси бревна (1/с) — чтобы не катилось как шар.
 @export var roll_damp: float = 6.0
-## Радиус (м) вокруг оси бревна, в котором игрок считается задавленным.
+## Радиус (м) вокруг оси бревна, в котором бревно может травмировать игрока.
 @export var kill_radius: float = 1.1
-## Минимальная скорость бревна (м/с) в точке у игрока, при которой оно убивает.
+## Минимальная скорость бревна (м/с) в точке у игрока, ниже которой урона нет вовсе.
 @export var kill_speed: float = 2.5
+## Множитель урона: HP = масса(кг) × скорость(м/с) × это. Тяжёлое+быстрое — насмерть,
+## лёгкое или медленное — почти безвредно. Удобная ручка баланса смертоносности брёвен.
+@export var damage_scale: float = 0.25
+## Пауза (с) между ударами одного бревна по игроку — чтоб одно падение не списало HP
+## за десяток кадров подряд, а нанесло один ощутимый удар.
+@export var hit_cooldown: float = 0.6
 
 @export_group("Форма слома")
 ## Макс. заострение торца «в кол» (м), когда рубили РАВНОМЕРНО ПО КРУГУ.
-@export var break_cone_max: float = 0.18
+@export var break_cone_max: float = 0.09
 ## Макс. скос торца (м), когда рубили В ОДНУ СТОРОНУ.
-@export var break_slant_max: float = 0.12
+@export var break_slant_max: float = 0.06
 ## Высота торчащих щепок на сломе (м).
-@export var break_splinter: float = 0.14
+@export var break_splinter: float = 0.08
 ## Сила «рваности» обода слома (м): дрожание радиуса/высоты на самом крайнем кольце.
 ## Тело ствола остаётся гладким — морщин по боковине нет.
-@export var break_jagged: float = 0.04
+@export var break_jagged: float = 0.025
 ## На какую глубину от торца (м) тянется формовка слома (конус/скос/щепки).
-@export var break_span: float = 0.55
+@export var break_span: float = 0.4
 
 ## Накопитель точек рубки (кластеры ударов) текущей стоячей части.
 var _sites: ChopSites
@@ -65,8 +72,6 @@ var last_chop_direction: Vector3 = Vector3.ZERO
 ## Дерево спилено под корень — больше не рубится (узел вот-вот удалится).
 var _depleted: bool = false
 
-# Плотность «древесины» подобрана так, что полный ствол ≈ исходной массе ~1800 кг.
-const LOG_DENSITY := 850.0
 # Ниже этой высоты пень спиливается «под корень» и исчезает (на этапе графики — щепками).
 const MIN_STUMP_HEIGHT := 0.18
 # Короче этой длины падающая часть не спавнится как физтело (балансировала бы/дрожала),
@@ -75,6 +80,8 @@ const MIN_FALL_PIECE := 0.6
 
 # Сцена щепок — всплеск частиц в точке удара.
 const CHIPS_SCENE := preload("res://scenes/chips.tscn")
+# Балансовые данные брёвен (плотность → вес → замедление переноски). Правится в .tres.
+const LOG_ITEM := preload("res://resources/log_item.tres")
 
 @onready var trunk_body: RigidBody3D = $TrunkBody
 @onready var mesh: MeshInstance3D = $TrunkBody/MeshInstance3D
@@ -244,61 +251,46 @@ func _shape_break(gen: ProceduralTrunk, top: bool, ring_factor: float, chop_angl
 	gen.notch_thick = notch_thickness
 
 
+# Собирает конфиг для фабрики бревна (FallingLog.spawn): материал, зарубки, форма слома,
+# тюнинг падения, балансовый ресурс. Одно место — и для падающего, и для расколотых кусков.
+func _log_cfg(mat: Material) -> Dictionary:
+	return {
+		"material": mat,
+		"notch_long": notch_blade_reach,
+		"notch_thick": notch_thickness,
+		"notch_max_depth": notch_max_depth,
+		"chops_needed": chops_to_fell,
+		"merge_radius": chop_merge_radius,
+		"chips_scene": CHIPS_SCENE,
+		"log_item": LOG_ITEM,
+		"break_cone_max": break_cone_max,
+		"break_slant_max": break_slant_max,
+		"break_splinter": break_splinter,
+		"break_jagged": break_jagged,
+		"break_span": break_span,
+		"initial_tip_speed": initial_tip_speed,
+		"fall_gravity_scale": fall_gravity_scale,
+		"launch_assist_torque": launch_assist_torque,
+		"down_angular_damp": down_angular_damp,
+		"down_linear_damp": down_linear_damp,
+		"roll_damp": roll_damp,
+		"kill_radius": kill_radius,
+		"kill_speed": kill_speed,
+		"damage_scale": damage_scale,
+		"hit_cooldown": hit_cooldown,
+	}
+
+
 # Создаёт свободное падающее бревно (FallingLog) и запускает его падение. base_world_y —
 # мировая высота НИЗА бревна (на уровне слома); слом (рваный торец) у его низа.
 func _spawn_falling_log(base_world_y: float, length: float, bottom_r: float,
 		top_r: float, mat: Material, ring_factor: float, chop_angle: float) -> void:
-	var gen := ProceduralTrunk.new()
-	gen.height = length
-	gen.bottom_radius = bottom_r
-	gen.top_radius = top_r
-	gen.material = mat
-	_shape_break(gen, false, ring_factor, chop_angle)
-	# Свежий слом снизу должен темнеть (vertex color × albedo) — как у пня.
-	var sm := mat as StandardMaterial3D
-	if sm:
-		sm.vertex_color_use_as_albedo = true
-
-	var body := FallingLog.new()
-	# Трение/упругость как у прежнего бревна — чтобы лежачее не скользило по полу.
-	var pm := PhysicsMaterial.new()
-	pm.friction = 1.0
-	pm.rough = true
-	pm.bounce = 0.15
-	body.physics_material_override = pm
-
-	var mi := MeshInstance3D.new()
-	# Меш центрирован по Y → поднимаем на половину длины над origin тела (его низом).
-	mi.mesh = gen.build([])
-	mi.position.y = length * 0.5
-	body.add_child(mi)
-
-	var col := CollisionShape3D.new()
-	var cs := CylinderShape3D.new()
-	cs.height = length
-	cs.radius = maxf(bottom_r, top_r)
-	col.shape = cs
-	col.position.y = length * 0.5
-	body.add_child(col)
-
-	get_tree().current_scene.add_child(body)
-
-	# Масса по объёму (конус-цилиндр) — для будущей системы урона.
-	var r_avg := (bottom_r + top_r) * 0.5
-	var log_mass := LOG_DENSITY * PI * r_avg * r_avg * length
-
-	# Прокидываем настройки падения из дерева — одно место правки на все падающие куски.
-	body.initial_tip_speed = initial_tip_speed
-	body.fall_gravity_scale = fall_gravity_scale
-	body.launch_assist_torque = launch_assist_torque
-	body.down_angular_damp = down_angular_damp
-	body.down_linear_damp = down_linear_damp
-	body.roll_damp = roll_damp
-	body.kill_radius = kill_radius
-	body.kill_speed = kill_speed
-
-	# Лежачее бревно тоже рубится (зарубки) — отдаём ему генератор и параметры зарубок.
-	body.setup_choppable(gen, mi, chops_to_fell, chop_merge_radius, notch_max_depth, CHIPS_SCENE)
+	var cfg := _log_cfg(mat)
+	var xf := Transform3D(Basis(),
+			Vector3(global_position.x, base_world_y, global_position.z))
+	# Слом (рваный торец) — снизу падающего бревна.
+	var body := FallingLog.spawn(get_tree().current_scene, cfg, xf, length,
+			bottom_r, top_r, ring_factor, chop_angle, true, false)
 
 	# Валим в сторону, ПРОТИВОПОЛОЖНУЮ стороне рубки (от рубящего).
 	var fall_dir := -last_chop_direction
@@ -315,13 +307,11 @@ func _spawn_falling_log(base_world_y: float, length: float, bottom_r: float,
 		var tilt_axis := Vector3.UP.cross(fall_dir).normalized()
 		var lift := bottom_r * sin(tilt) + 0.05
 		body.global_position = Vector3(global_position.x, base_world_y + lift, global_position.z)
-		var xf := body.global_transform
-		xf.basis = Basis(tilt_axis, tilt) * xf.basis
-		body.global_transform = xf
-	else:
-		body.global_position = Vector3(global_position.x, base_world_y, global_position.z)
+		var bxf := body.global_transform
+		bxf.basis = Basis(tilt_axis, tilt) * bxf.basis
+		body.global_transform = bxf
 
-	body.launch(fall_dir, length, log_mass)
+	body.launch(fall_dir, length, body.mass)
 	# Короткому даём ещё лёгкий толчок в сторону падения — чтобы точно сошёл с пня.
 	if length < 2.0:
 		body.linear_velocity = fall_dir * 1.0

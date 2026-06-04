@@ -1,0 +1,8 @@
+[gd_resource type="Resource" script_class="LogItem" format=3 uid="uid://u1phb0a7sm3u"]
+
+[ext_resource type="Script" uid="uid://dkmneydvp4gjy" path="res://scripts/log_item.gd" id="1_logitem"]
+
+[resource]
+script = ExtResource("1_logitem")
+density = 525.0
+min_length = 0.35

@@ -10,6 +10,20 @@ height = 1.8
 [sub_resource type="SphereShape3D" id="ChopShape"]
 radius = 0.15
 
+[sub_resource type="StyleBoxFlat" id="HpBarBg"]
+bg_color = Color(0.08, 0.08, 0.08, 0.7)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="HpBarFill"]
+bg_color = Color(0.8, 0.12, 0.12, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
 [node name="Player" type="CharacterBody3D" groups=["player"]]
 collision_layer = 2
 collision_mask = 21
@@ -44,5 +58,42 @@ offset_bottom = 12.0
 grow_horizontal = 2
 grow_vertical = 2
 text = "+"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Prompt" type="Label" parent="HUD"]
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -120.0
+offset_top = 24.0
+offset_right = 120.0
+offset_bottom = 48.0
+grow_horizontal = 2
+grow_vertical = 2
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="HpBar" type="ProgressBar" parent="HUD"]
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_top = -44.0
+offset_right = 216.0
+offset_bottom = -16.0
+grow_vertical = 0
+max_value = 100.0
+value = 100.0
+show_percentage = false
+theme_override_styles/background = SubResource("HpBarBg")
+theme_override_styles/fill = SubResource("HpBarFill")
+
+[node name="HpLabel" type="Label" parent="HUD/HpBar"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "100"
 horizontal_alignment = 1
 vertical_alignment = 1

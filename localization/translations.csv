@@ -1,0 +1,5 @@
+keys,en,ru
+PROMPT_PICKUP,"[E] Pick up ({kg} kg)","[E] Поднять ({kg} кг)"
+PROMPT_DROP,"[E] Drop ({kg} kg)","[E] Бросить ({kg} кг)"
+PROMPT_TOO_HEAVY,"Too heavy ({kg} kg)","Слишком тяжёлое ({kg} кг)"
+PROMPT_DRAG,"[E] Drag ({kg} kg)","[E] Тащить ({kg} кг)"
