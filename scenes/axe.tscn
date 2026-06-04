@@ -1,0 +1,30 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/axe.gd" id="1_axe"]
+
+[sub_resource type="StandardMaterial3D" id="HandleMat"]
+albedo_color = Color(0.4, 0.26, 0.14, 1)
+
+[sub_resource type="StandardMaterial3D" id="HeadMat"]
+albedo_color = Color(0.3, 0.3, 0.33, 1)
+metallic = 0.4
+roughness = 0.5
+
+[sub_resource type="BoxMesh" id="HandleMesh"]
+material = SubResource("HandleMat")
+size = Vector3(0.035, 0.6, 0.035)
+
+[sub_resource type="BoxMesh" id="HeadMesh"]
+material = SubResource("HeadMat")
+size = Vector3(0.06, 0.16, 0.22)
+
+[node name="Axe" type="Node3D"]
+script = ExtResource("1_axe")
+
+[node name="Handle" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.3, 0)
+mesh = SubResource("HandleMesh")
+
+[node name="Head" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.56, -0.07)
+mesh = SubResource("HeadMesh")
