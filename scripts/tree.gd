@@ -1,229 +1,327 @@
 extends Node3D
 
-## Срабатывает в момент, когда дерево начинает падать.
+## Стоячее дерево: его рубят, оно копит зарубки и при добитии ОДНОЙ точки ломается на
+## этой высоте. Падающая часть улетает свободным бревном (FallingLog), а нижняя остаётся
+## СТОЯЧИМ ПНЁМ — и это снова «то же самое дерево», только короче: его рубят тем же путём,
+## снова ломают, снова отлетает бревно. Так пень и ствол — ОДНА реализация, без отдельной
+## ветки кода под пень.
+##
+## trunk_body (RigidBody3D, заморожен) — всегда «текущая стоячая часть». _trunk — её
+## генератор меша, _sites — накопитель ударов по ней. Меш центрирован по Y; origin тела
+## стоит на земле, меш и коллизия подняты на половину текущей высоты.
+
+## Срабатывает в момент, когда от дерева отламывается падающее бревно.
 signal chopped_through(fall_direction: Vector3)
 
-## Сколько ударов нужно, чтобы дерево подрубилось.
+## Сколько ударов нужно, чтобы добить одну точку рубки (HP рубки в ударах).
 @export var chops_to_fell: int = 5
+## Радиус (м) слияния ударов в одну точку рубки — ВЫСОТНАЯ полоса вдоль оси: удары в её
+## пределах копятся в один разруб независимо от стороны (рубка по кругу = один руб).
+@export var chop_merge_radius: float = 0.2
+## Максимальная глубина вдавливания зарубки (м) у добитой точки.
+@export var notch_max_depth: float = 0.3
+## Полудлина прорези ВДОЛЬ лезвия топора (м) — насколько широкий разруб делает кромка.
+@export var notch_blade_reach: float = 0.22
+## Полуширина прорези ПОПЕРЁК лезвия (м) — толщина зарубки.
+@export var notch_thickness: float = 0.12
+
+@export_group("Падение бревна")
 ## Начальный толчок (рад/с), задающий сторону падения. Дальше валит гравитация.
 @export var initial_tip_speed: float = 0.5
-## Множитель гравитации НА ВРЕМЯ ПАДЕНИЯ. >1 ускоряет падение целиком, не меняя
-## траекторию (масштаб гравитации = масштаб времени). 1.3 ≈ на 12% быстрее.
+## Множитель гравитации НА ВРЕМЯ ПАДЕНИЯ — ускоряет падение целиком, не меняя траекторию.
 @export var fall_gravity_scale: float = 1.3
-## "Дожим" (Н·м) у самой вертикали: спасает от зависания/"танца", если стартовый
-## толчок потерялся. Срабатывает только пока ствол почти вертикален и не крутится.
+## "Дожим" (Н·м) у самой вертикали: спасает от зависания, если стартовый толчок потерялся.
 @export var launch_assist_torque: float = 20000.0
-## Общее гашение вращения лежачего бревна — НИЗКОЕ, чтобы не мешать игроку
-## перевешивать (наклон-качели). За остановку качения отвечает roll_damp ниже.
+## Гашение вращения лежачего бревна — низкое, чтобы не мешать игроку перевешивать.
 @export var down_angular_damp: float = 0.5
 ## Гашение линейного скольжения лежачего бревна.
 @export var down_linear_damp: float = 0.5
-## Скорость гашения КАЧЕНИЯ вокруг длинной оси бревна (1/с). Гасим только эту ось —
-## цилиндр-каток перестаёт укатываться как бильярд, но наклон-качели не страдает.
-## На уклоне гравитация всё равно пересиливает и бревно катится вниз.
+## Скорость гашения КАЧЕНИЯ вокруг длинной оси бревна (1/с) — чтобы не катилось как шар.
 @export var roll_damp: float = 6.0
-## Радиус (м) вокруг оси падающего ствола, в котором игрок считается задавленным.
+## Радиус (м) вокруг оси бревна, в котором игрок считается задавленным.
 @export var kill_radius: float = 1.1
+## Минимальная скорость бревна (м/с) в точке у игрока, при которой оно убивает.
+@export var kill_speed: float = 2.5
 
-enum State { STANDING, FALLING, DOWN }
+@export_group("Форма слома")
+## Макс. заострение торца «в кол» (м), когда рубили РАВНОМЕРНО ПО КРУГУ.
+@export var break_cone_max: float = 0.18
+## Макс. скос торца (м), когда рубили В ОДНУ СТОРОНУ.
+@export var break_slant_max: float = 0.12
+## Высота торчащих щепок на сломе (м).
+@export var break_splinter: float = 0.14
+## Сила «рваности» обода слома (м): дрожание радиуса/высоты на самом крайнем кольце.
+## Тело ствола остаётся гладким — морщин по боковине нет.
+@export var break_jagged: float = 0.04
+## На какую глубину от торца (м) тянется формовка слома (конус/скос/щепки).
+@export var break_span: float = 0.55
 
-var _chop_count: int = 0
-var is_chopped: bool = false
+## Накопитель точек рубки (кластеры ударов) текущей стоячей части.
+var _sites: ChopSites
+## Генератор процедурного меша текущей стоячей части (ствол → пень → ниже).
+var _trunk: ProceduralTrunk
 ## Горизонтальное направление от ствола к рубящему — "сторона рубки".
 var last_chop_direction: Vector3 = Vector3.ZERO
-var _player_killed: bool = false
+## Дерево спилено под корень — больше не рубится (узел вот-вот удалится).
+var _depleted: bool = false
 
-var _state: State = State.STANDING
-# Падение настоящей физикой: ствол опрокидывается свободным телом через нижнюю
-# кромку основания, как палка/дерево. Никаких шарниров — гравитация валит сама.
-var _fall_axis: Vector3 = Vector3.ZERO
-var _fall_direction: Vector3 = Vector3.ZERO
-# Сколько времени ствол почти не вращается — признак, что он лёг/упёрся.
-var _rest_timer: float = 0.0
+# Плотность «древесины» подобрана так, что полный ствол ≈ исходной массе ~1800 кг.
+const LOG_DENSITY := 850.0
+# Ниже этой высоты пень спиливается «под корень» и исчезает (на этапе графики — щепками).
+const MIN_STUMP_HEIGHT := 0.18
+# Короче этой длины падающая часть не спавнится как физтело (балансировала бы/дрожала),
+# а просто исчезает — позже разлетится щепками.
+const MIN_FALL_PIECE := 0.6
 
-# Геометрия ствола — для размещения смертельной зоны.
-const TRUNK_LENGTH := 9.0
-# Гашение вращения на время ПАДЕНИЯ — низкое, чтобы гравитация свободно валила.
-const FALL_ANGULAR_DAMP := 0.1
-# Ниже этого наклона (рад) и при почти нулевом вращении считаем, что ствол "завис"
-# у вертикали — включаем дожим. Нормальное падение этот порог проскакивает мгновенно.
-const LAUNCH_STALL_ANGLE := 4.0
-const LAUNCH_STALL_SPEED := 0.15
-# Наклон (от вертикали), при котором считаем падение завершённым: возвращаем
-# нормальное гашение и коллизии. Почти горизонталь.
-const DETACH_ANGLE := 80.0
-# Если ствол упёрся во что-то раньше (завис под этим углом без вращения столько
-# секунд) — тоже считаем, что лёг.
-const REST_DETACH_TIME := 0.5
-# Безопасные поля падения: первые и последние 10% угла никого не убивают.
-const DANGER_START := 0.1
-const DANGER_END := 0.9
+# Сцена щепок — всплеск частиц в точке удара.
+const CHIPS_SCENE := preload("res://scenes/chips.tscn")
 
 @onready var trunk_body: RigidBody3D = $TrunkBody
 @onready var mesh: MeshInstance3D = $TrunkBody/MeshInstance3D
+@onready var trunk_collision: CollisionShape3D = $TrunkBody/CollisionShape3D
 @onready var stump: StaticBody3D = $Stump
-@onready var danger_zone: Area3D = $DangerZone
 
 
-func _physics_process(_delta: float) -> void:
-	if _state == State.FALLING:
-		_process_fall(_delta)
-	elif _state == State.DOWN:
-		_damp_roll(_delta)
+func _ready() -> void:
+	# Старый отдельный узел-пень больше не нужен: пнём становится сам trunk_body.
+	if stump:
+		stump.queue_free()
+
+	# Накопитель кластеров ударов (позиции — в локале меша стоячей части).
+	_sites = ChopSites.new(chop_merge_radius, chops_to_fell)
+
+	# Берём размеры и материал из исходного CylinderMesh, заданного в редакторе, — дальше
+	# меш строим сами в коде, чтобы вдавливать настоящие зарубки.
+	_trunk = ProceduralTrunk.new()
+	var cyl := mesh.mesh as CylinderMesh
+	if cyl:
+		_trunk.height = cyl.height
+		_trunk.bottom_radius = cyl.bottom_radius
+		_trunk.top_radius = cyl.top_radius
+	_trunk.material = mesh.mesh.surface_get_material(0) if mesh.mesh.get_surface_count() > 0 else null
+	_trunk.notch_long = notch_blade_reach
+	_trunk.notch_thick = notch_thickness
+	# Чтобы тёмная гашь зарубки (vertex color) была видна, материал должен умножать albedo.
+	var sm := _trunk.material as StandardMaterial3D
+	if sm:
+		sm.vertex_color_use_as_albedo = true
+
+	# Сразу подменяем меш на процедурный (пока без зарубок — выглядит так же).
+	_rebuild_trunk()
 
 
-func chop(chopper_position: Vector3) -> void:
-	if is_chopped:
+# Пересобирает меш текущей стоячей части под её точки рубки: каждая даёт вдавленную ямку
+# глубиной по своему прогрессу (+ форма слома, если это уже пень). Зовём только на удар.
+func _rebuild_trunk() -> void:
+	var carves: Array = []
+	for site in _sites.sites:
+		carves.append({
+			"pos": site.local_pos,
+			"depth": _sites.depth_fraction(site) * notch_max_depth,
+			"blade": site.blade,
+		})
+	mesh.mesh = _trunk.build(carves)
+
+
+# Удар по стоячей части (стволу ИЛИ пню — путь один). Растим зарубку в точке попадания;
+# при добитии ОДНОЙ точки ломаем на её высоте.
+func chop(chopper_position: Vector3, hit_point: Vector3 = Vector3.INF,
+		hit_normal: Vector3 = Vector3.UP, power: float = 1.0,
+		edge_dir: Vector3 = Vector3.ZERO) -> void:
+	if _depleted:
+		return
+	# Нужна точка попадания (куда класть зарубку).
+	if not hit_point.is_finite():
 		return
 
-	_chop_count += 1
+	_spawn_chips(hit_point, chopper_position)
+	# Удар идёт в КОНКРЕТНУЮ точку рубки (позиция в локале меша). Зарубка растёт там,
+	# повёрнутая по лезвию топора в момент удара (вдоль/поперёк/наискось ствола).
+	var local_point := mesh.to_local(hit_point)
+	var local_edge := mesh.global_transform.basis.inverse() * edge_dir
+	var blade := ProceduralTrunk.surface_blade_dir(local_point, local_edge)
+	var site := _sites.add_hit(local_point, power, blade)
+	_rebuild_trunk()
 
 	var dir := chopper_position - global_position
 	dir.y = 0.0
 	if dir.length() > 0.01:
 		last_chop_direction = dir.normalized()
 
-	print("Удар %d/%d, сторона рубки: %s" % [_chop_count, chops_to_fell, last_chop_direction])
-
-	if _chop_count >= chops_to_fell:
-		_fell()
-
-
-func _fell() -> void:
-	is_chopped = true
-
-	# Падаем в сторону, ПРОТИВОПОЛОЖНУЮ стороне рубки (от рубящего).
-	_fall_direction = -last_chop_direction
-	if _fall_direction.length() < 0.01:
-		_fall_direction = Vector3.FORWARD
-	_fall_direction = _fall_direction.normalized()
-	print("Дерево подрублено, валится в сторону: %s" % _fall_direction)
-
-	# Greybox-пометка состояния.
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.2, 0.12, 0.08)
-	mesh.material_override = mat
-
-	# Ось поворота — горизонтальная, перпендикулярная направлению падения.
-	_fall_axis = Vector3.UP.cross(_fall_direction).normalized()
-
-	# Ствол становится ЖИВЫМ телом и сталкивается со всем твёрдым (пол, стоячие
-	# стволы, лежащие брёвна, кубы). Свой пень исключаем — иначе кромка основания
-	# при опрокидывании цеплялась бы за него.
-	trunk_body.collision_layer = 1 | 4
-	trunk_body.collision_mask = 1 | 4
-	trunk_body.add_collision_exception_with(stump)
-	# На время падения занижаем гашение, иначе демпфер съедает старт у вертикали.
-	trunk_body.angular_damp = FALL_ANGULAR_DAMP
-	# Ускоряем падение целиком (та же траектория, меньше времени).
-	trunk_body.gravity_scale = fall_gravity_scale
-	trunk_body.freeze = false
-
-	# Толчок в сторону падения ПРЯМО С ВЕРТИКАЛИ (без мгновенного доворота — иначе
-	# виден "скачок" на стартовый угол). Этой угловой скорости хватает перевалить
-	# ствол через точку опрокидывания (для нашего цилиндра барьер ~0.12 рад/с),
-	# дальше его свободно валит гравитация через кромку основания.
-	trunk_body.angular_velocity = _fall_axis * initial_tip_speed
-
-	_rest_timer = 0.0
-	_state = State.FALLING
-
-	chopped_through.emit(_fall_direction)
-
-
-func _process_fall(delta: float) -> void:
-	# Текущий наклон ствола от вертикали (его длинная ось — локальный Y).
-	var up_axis := trunk_body.global_transform.basis.y
-	var tilt := acos(clampf(up_axis.dot(Vector3.UP), -1.0, 1.0))
-
-	# Дожим у вертикали: если ствол почти не наклонён и почти не крутится — он завис
-	# в метастабильном равновесии ("танцует"). Толкаем его в сторону падения, пока он
-	# не сорвётся. Нормальное падение этот режим не задевает (там есть вращение).
-	if tilt < deg_to_rad(LAUNCH_STALL_ANGLE) \
-			and trunk_body.angular_velocity.length() < LAUNCH_STALL_SPEED:
-		trunk_body.apply_torque(_fall_axis * launch_assist_torque)
-
-	# Держим падение В ОДНОЙ ПЛОСКОСТИ: оставляем только вращение вокруг оси падения,
-	# гасим боковые составляющие. Круглый торец иначе "укатывается" вбок и даёт
-	# неестественную закрутку всегда в одну сторону.
-	trunk_body.angular_velocity = _fall_axis * trunk_body.angular_velocity.dot(_fall_axis)
-
-	# Убивает только середина падения (10%..90% от горизонтали). Края безопасны.
-	var progress := tilt / (PI * 0.5)
-	if progress >= DANGER_START and progress <= DANGER_END:
-		_check_kill()
-
-	# Дошли почти до горизонтали — падение закончено.
-	if tilt >= deg_to_rad(DETACH_ANGLE):
-		_detach()
-		return
-
-	# Или ствол упёрся во что-то и завис (почти не вращается) — тоже отпускаем.
-	if tilt > deg_to_rad(20.0) and trunk_body.angular_velocity.length() < 0.2:
-		_rest_timer += delta
-		if _rest_timer >= REST_DETACH_TIME:
-			_detach()
+	# Ломается, только когда ОДНА точка добита — именно на её высоте. Форму слома задаёт,
+	# как рубили: по кругу → кол, в одну сторону → скос.
+	if _sites.is_felled(site):
+		print("Точка добита (%d ударов) — часть валится." % chops_to_fell)
+		_fell(site.local_pos.y, _sites.ring_factor(site), _sites.mean_angle(site))
 	else:
-		_rest_timer = 0.0
+		print("Удар засчитан (сторона: %s)." % last_chop_direction)
 
 
-# Падение завершено. Бревно и так уже свободное тело — просто возвращаем сильное
-# гашение и нормальные коллизии. Физика всё разрешила контактами сама, поэтому ни
-# лучей, ни ручной укладки больше не нужно.
-func _detach() -> void:
-	_state = State.DOWN
-
-	# Возвращаем нормальную гравитацию и включаем сильное гашение — лежачее бревно
-	# спокойно оседает и не катается как шар, но всё ещё может скатиться под уклон.
-	trunk_body.gravity_scale = 1.0
-	trunk_body.angular_damp = down_angular_damp
-	trunk_body.linear_damp = down_linear_damp
-
-	# Теперь лежачее бревно упирается и в чужие пни (свой остаётся исключён).
-	trunk_body.collision_mask = 1 | 4 | 16
-	trunk_body.add_to_group("choppable_log")
-
-	print("Ствол лёг. Дальше свободная физика (качение/штабель).")
+# Всплеск щепок в точке удара. Летят наружу из ствола, в сторону рубящего.
+func _spawn_chips(point: Vector3, chopper_position: Vector3) -> void:
+	var chips := CHIPS_SCENE.instantiate()
+	get_tree().current_scene.add_child(chips)
+	chips.global_position = point
+	var dir := chopper_position - point
+	dir.y = 0.0
+	if dir.length() > 0.01:
+		# look_at направляет локальный -Z на цель; в chips.tscn частицы летят по -Z.
+		chips.look_at(point + dir.normalized(), Vector3.UP)
 
 
-# Гасим ТОЛЬКО качение вокруг длинной оси бревна (его локальный Y). Наклон-качели
-# (вращение вокруг других осей) не трогаем — иначе игрок не сможет перевесить конец.
-func _damp_roll(delta: float) -> void:
-	var w := trunk_body.angular_velocity
-	if w.length_squared() < 1e-6:
-		return
-	var axis := trunk_body.global_transform.basis.y.normalized()
-	var roll := axis * w.dot(axis)
-	trunk_body.angular_velocity = w - roll * clampf(roll_damp * delta, 0.0, 1.0)
+# Ломаем текущую стоячую часть на высоте cut_local_y (локаль меша, centered). Верхняя
+# часть улетает свободным бревном, нижняя остаётся СТОЯЧИМ ПНЁМ (тем же объектом).
+# ring_factor — как рубили (0 в одну сторону → скос, 1 по кругу → кол),
+# chop_angle — преобладающая сторона рубки (для направления скоса).
+func _fell(cut_local_y: float, ring_factor: float = 0.0, chop_angle: float = 0.0) -> void:
+	var total := _trunk.height
+	# Высота слома над основанием (0..total).
+	var cut_h := clampf(total * 0.5 + cut_local_y, 0.05, total - 0.05)
+	var r_cut := lerpf(_trunk.bottom_radius, _trunk.top_radius, cut_h / total)
+	var mat := _trunk.material
+	var base_r := _trunk.bottom_radius
+	var top_r := _trunk.top_radius
+	var piece_len := total - cut_h
+	var stump_too_low := cut_h < MIN_STUMP_HEIGHT
+
+	# 1) СНАЧАЛА разбираемся со стоячей частью (укорачиваем пень / убираем коллизию), чтобы
+	#    у падающего бревна не было пересечения с коллизией стоячей части (иначе их
+	#    «расталкивает», бревно дёргается и встаёт обратно вертикально).
+	if stump_too_low:
+		# Спилено под корень — пня не остаётся, весь объект уберём ниже.
+		_depleted = true
+		trunk_collision.disabled = true
+		mesh.visible = false
+	else:
+		var gen := ProceduralTrunk.new()
+		gen.height = cut_h
+		gen.bottom_radius = base_r
+		gen.top_radius = r_cut
+		gen.material = mat
+		_shape_break(gen, true, ring_factor, chop_angle)
+		mesh.mesh = gen.build([])
+		mesh.position.y = cut_h * 0.5
+		var sh := CylinderShape3D.new()
+		sh.height = cut_h
+		sh.radius = maxf(base_r, r_cut)
+		trunk_collision.shape = sh
+		trunk_collision.position.y = cut_h * 0.5
+		# Пень — это снова «стоячая часть»: тот же генератор, новый накопитель ударов.
+		_trunk = gen
+		_sites = ChopSites.new(chop_merge_radius, chops_to_fell)
+
+	# 2) Падающая часть: достаточно длинная — свободное бревно; короткий обломок исчезает.
+	if piece_len >= MIN_FALL_PIECE:
+		_spawn_falling_log(global_position.y + cut_h, piece_len, r_cut, top_r, mat,
+				ring_factor, chop_angle)
+
+	var fall_dir := -last_chop_direction
+	if fall_dir.length() < 0.01:
+		fall_dir = Vector3.FORWARD
+	chopped_through.emit(fall_dir.normalized())
+
+	if _depleted:
+		# Пень ниже минимума — убираем всё дерево (падающее бревно уже отдельный объект).
+		queue_free()
 
 
-# Смерть проверяем по РЕАЛЬНОМУ текущему положению ствола, а не по заранее
-# просчитанной траектории: меряем расстояние от игрока до отрезка-оси бревна.
-func _check_kill() -> void:
-	# Концы ствола: его коллизия в локальных координатах тела тянется по Y от 0 до 9.
-	var a := trunk_body.to_global(Vector3.ZERO)
-	var b := trunk_body.to_global(Vector3(0.0, TRUNK_LENGTH, 0.0))
-	for player in get_tree().get_nodes_in_group("player"):
-		if not (player is Node3D):
-			continue
-		# Берём точку примерно в середине роста игрока, а не у ступней.
-		var p: Vector3 = (player as Node3D).global_position + Vector3.UP * 0.9
-		if _point_segment_distance(p, a, b) <= kill_radius:
-			_kill_player()
+# Настраивает форму слома у генератора: рваный обод, скос/конус по тому, КАК рубили.
+# top=true — слом сверху (пень), false — снизу (торец падающего бревна).
+func _shape_break(gen: ProceduralTrunk, top: bool, ring_factor: float, chop_angle: float) -> void:
+	if top:
+		gen.jagged_top = true
+	else:
+		gen.jagged_bottom = true
+	gen.jagged_seed = randf() * 100.0
+	gen.rim_bias_angle = chop_angle
+	# Рубили в одну сторону → скос; по кругу → заострение «в кол».
+	gen.rim_bias = (1.0 - ring_factor) * break_slant_max
+	gen.tip_cone = ring_factor * break_cone_max
+	gen.splinter_height = break_splinter
+	gen.jagged_amount = break_jagged
+	gen.break_span = break_span
+	gen.notch_long = notch_blade_reach
+	gen.notch_thick = notch_thickness
 
 
-func _point_segment_distance(p: Vector3, a: Vector3, b: Vector3) -> float:
-	var ab := b - a
-	var len_sq := ab.length_squared()
-	if len_sq < 1e-6:
-		return p.distance_to(a)
-	var t := clampf((p - a).dot(ab) / len_sq, 0.0, 1.0)
-	return p.distance_to(a + ab * t)
+# Создаёт свободное падающее бревно (FallingLog) и запускает его падение. base_world_y —
+# мировая высота НИЗА бревна (на уровне слома); слом (рваный торец) у его низа.
+func _spawn_falling_log(base_world_y: float, length: float, bottom_r: float,
+		top_r: float, mat: Material, ring_factor: float, chop_angle: float) -> void:
+	var gen := ProceduralTrunk.new()
+	gen.height = length
+	gen.bottom_radius = bottom_r
+	gen.top_radius = top_r
+	gen.material = mat
+	_shape_break(gen, false, ring_factor, chop_angle)
+	# Свежий слом снизу должен темнеть (vertex color × albedo) — как у пня.
+	var sm := mat as StandardMaterial3D
+	if sm:
+		sm.vertex_color_use_as_albedo = true
 
+	var body := FallingLog.new()
+	# Трение/упругость как у прежнего бревна — чтобы лежачее не скользило по полу.
+	var pm := PhysicsMaterial.new()
+	pm.friction = 1.0
+	pm.rough = true
+	pm.bounce = 0.15
+	body.physics_material_override = pm
 
-func _kill_player() -> void:
-	if _player_killed:
-		return
-	_player_killed = true
-	print("СМЕРТЬ: игрок под падающим деревом. Перезапуск сцены.")
-	get_tree().reload_current_scene()
+	var mi := MeshInstance3D.new()
+	# Меш центрирован по Y → поднимаем на половину длины над origin тела (его низом).
+	mi.mesh = gen.build([])
+	mi.position.y = length * 0.5
+	body.add_child(mi)
+
+	var col := CollisionShape3D.new()
+	var cs := CylinderShape3D.new()
+	cs.height = length
+	cs.radius = maxf(bottom_r, top_r)
+	col.shape = cs
+	col.position.y = length * 0.5
+	body.add_child(col)
+
+	get_tree().current_scene.add_child(body)
+
+	# Масса по объёму (конус-цилиндр) — для будущей системы урона.
+	var r_avg := (bottom_r + top_r) * 0.5
+	var log_mass := LOG_DENSITY * PI * r_avg * r_avg * length
+
+	# Прокидываем настройки падения из дерева — одно место правки на все падающие куски.
+	body.initial_tip_speed = initial_tip_speed
+	body.fall_gravity_scale = fall_gravity_scale
+	body.launch_assist_torque = launch_assist_torque
+	body.down_angular_damp = down_angular_damp
+	body.down_linear_damp = down_linear_damp
+	body.roll_damp = roll_damp
+	body.kill_radius = kill_radius
+	body.kill_speed = kill_speed
+
+	# Лежачее бревно тоже рубится (зарубки) — отдаём ему генератор и параметры зарубок.
+	body.setup_choppable(gen, mi, chops_to_fell, chop_merge_radius, notch_max_depth, CHIPS_SCENE)
+
+	# Валим в сторону, ПРОТИВОПОЛОЖНУЮ стороне рубки (от рубящего).
+	var fall_dir := -last_chop_direction
+	if fall_dir.length() < 0.01:
+		fall_dir = Vector3.FORWARD
+	fall_dir = fall_dir.normalized()
+
+	# Короткие куски стоят на торце в МЕТАСТАБИЛЬНОМ равновесии: чтобы повалиться, их центр
+	# тяжести должен переехать кромку торца — а на пне они вместо этого «прилипают» и дрожат.
+	# Поэтому короткий кусок сразу наклоняем ЗА точку опрокидывания и приподнимаем над пнём
+	# (зазор), чтобы гравитация мгновенно его повалила — как ощущается первый сруб.
+	if length < 2.0:
+		var tilt := minf(atan2(2.0 * bottom_r, length) + deg_to_rad(10.0), deg_to_rad(45.0))
+		var tilt_axis := Vector3.UP.cross(fall_dir).normalized()
+		var lift := bottom_r * sin(tilt) + 0.05
+		body.global_position = Vector3(global_position.x, base_world_y + lift, global_position.z)
+		var xf := body.global_transform
+		xf.basis = Basis(tilt_axis, tilt) * xf.basis
+		body.global_transform = xf
+	else:
+		body.global_position = Vector3(global_position.x, base_world_y, global_position.z)
+
+	body.launch(fall_dir, length, log_mass)
+	# Короткому даём ещё лёгкий толчок в сторону падения — чтобы точно сошёл с пня.
+	if length < 2.0:
+		body.linear_velocity = fall_dir * 1.0
