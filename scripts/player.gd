@@ -1,4 +1,5 @@
 extends CharacterBody3D
+class_name Player
 
 ## Скорость обычной ходьбы, м/с.
 @export var walk_speed: float = 4.0
@@ -54,23 +55,9 @@ extends CharacterBody3D
 ## Порог «торцевого» подхода: |cos| между осью бревна и нормалью контакта. Выше — считаем, что
 ## игрок упёрся в ТОРЕЦ (подход вдоль бревна); ниже — в БОК. 0.55 ≈ конус ~57° вокруг оси.
 @export var end_on_threshold: float = 0.55
-## Отдача камеры вверх при попадании топором (градусы) — «весомость» удара.
-@export var kick_pitch_deg: float = 1.2
-## Случайный крен камеры при попадании (градусы, в обе стороны).
-@export var kick_roll_deg: float = 0.5
-## Случайный рывок камеры вбок при попадании (градусы) — разнообразит отдачу.
-@export var kick_yaw_deg: float = 0.8
-## Скорость возврата камеры после кика (1/с): больше — быстрее успокаивается.
+## Скорость возврата камеры после кика (1/с): больше — быстрее успокаивается. Сам кик (отдачу при
+## ударе) задаёт компонент ChopController; здесь — только скорость её затухания в _process.
 @export var kick_recover_speed: float = 12.0
-## Чувствительность «протяжки» топора мышью: сколько прицела даёт пиксель движения
-## мыши, пока зажата ЛКМ. Двигаешь мышь поперёк дерева — топор бьёт в ту сторону.
-@export var drag_sensitivity: float = 0.012
-## Затухание накопленной протяжки (1/с): прицел от мыши плавно сбрасывается к нулю,
-## так удар идёт по СВЕЖЕМУ движению руки, а не по всей истории.
-@export var drag_decay: float = 5.0
-## Импульс (Н·с), которым лезвие толкает свободные физтела при попадании. Скорость от
-## него = импульс / масса: лёгкие поленья сдвигаются заметно, тяжёлые брёвна — еле-еле.
-@export var axe_push_impulse: float = 112.0
 ## На сколько метров перед игроком кладётся брошенное бревно.
 @export var drop_distance: float = 1.2
 
@@ -88,19 +75,7 @@ extends CharacterBody3D
 ## Доля грузоподъёмности, ниже которой бревно несут на ЛЕВОМ плече (топор в правой руке),
 ## а на/выше — на правом плече (топор убран в карман до сброса).
 @export var shoulder_left_fraction: float = 0.4
-## Сила удара топором, когда бревно лежит на ЛЕВОМ плече (топор в правой руке) — рубим
-## слабее, рука занята. 1 — без штрафа, 0.5 — вдвое слабее.
-@export var carry_chop_power_mult: float = 0.5
-## ЗАРЯД УДАРА (#4): чем дольше зажата ЛКМ (замах), тем сильнее удар — от 100% до chop_power_max.
-## chop_charge_time — за сколько секунд удержания заряд доходит до максимума.
-@export var chop_charge_time: float = 0.7
-## Потолок силы удара от заряда (1.5 = +50% к базовой при полном замахе).
-@export var chop_power_max: float = 1.5
-## Множитель силы при БОКОВОМ ударе (A/D): косой руб слабее прямого. Масштабируется по |aim.x|.
-@export var chop_side_power_mult: float = 0.9
-## Множитель силы ПРЕРЫВАЮЩЕГО удара (#4): начали новый замах, пока прошлый ещё доигрывал (~90-95%)
-## — спешка, удар слабее (0.87 ≈ 87% силы).
-@export var chop_interrupt_power_mult: float = 0.87
+# Сила удара/заряд/боковой штраф и отдача камеры переехали на компонент ChopController (его и крути).
 ## Предел ВОЛОКА (кг): бревно тяжелее грузоподъёмности, но не тяжелее этого, можно тащить
 ## волоком. Тяжелее — никак (позже: тачка/прокачка). 170.49: бревно, показывающее «170 кг»
 ## (т.е. вес ≤170.49 после округления), ещё тащится; «171 кг» (≥170.5) — уже слишком тяжёлое.
@@ -178,9 +153,8 @@ extends CharacterBody3D
 ## Должно быть заметно больше grab_distance+barrow_play, чтобы обычная езда/доворот не отпускали.
 @export var barrow_max_gap: float = 0.7
 
-@export_group("Здоровье")
-## Максимум HP. Урон от брёвен считается как масса × скорость × damage_scale (в дереве).
-@export var max_hp: float = 100.0
+# Здоровье (max_hp, урон, полоска, смерть) — на компоненте Health (узел-ребёнок). Player —
+# фасад: take_damage() пересылает туда. Тунинг max_hp крути на узле Health.
 
 var _jump_velocity: float = 0.0
 ## Несомое бревно (или null). Несёшь — медленнее ходишь, тяжёлое — сильнее.
@@ -213,29 +187,14 @@ var _step_offset: Vector3 = Vector3.ZERO
 ## переступать не нужно; степ-ап включаем только при реальном упоре. См. _snap_up_step.
 var _pre_move_pos: Vector3 = Vector3.ZERO
 var _wish_speed: float = 0.0
-## Текущее здоровье. Падает от ударов брёвен; на нуле — смерть (перезапуск сцены).
-var _hp: float = 100.0
 ## Топор убран (несём тяжёлое бревно на правом плече) — рубить нельзя.
 var _axe_stowed: bool = false
 ## Наклон взгляда вверх/вниз (рад). Храним отдельно, чтобы кик камеры можно было
 ## накладывать поверх, не ломая ограничение обзора.
 var _look_pitch: float = 0.0
-## Текущая отдача камеры (рад): x — тангаж, y — рыскание, z — крен. Затухает к нулю.
+## Текущая отдача камеры (рад): x — тангаж, y — рыскание, z — крен. Затухает к нулю в _process.
+## Импульс отдачи при ударе добавляет компонент ChopController через add_camera_kick().
 var _kick: Vector3 = Vector3.ZERO
-## Прицел последнего замаха (x: лево/право, y: верх/низ) — для варьирования кика.
-var _last_aim: Vector2 = Vector2.ZERO
-## ЛКМ зажата — топор в замахе, целимся. Удар будет на отпускании.
-var _charging: bool = false
-## Момент начала замаха (сек) — по нему считаем длительность удержания → силу удара (#4).
-var _charge_start_s: float = 0.0
-## Текущий замах начат ПОВЕРХ недоигравшего удара (прерывающий, спешка) → удар слабее (#4).
-var _chop_charging_interrupted: bool = false
-## Множитель силы текущего удара (заряд × бок × прерывание). Применяется в _on_axe_impact (#4).
-var _chop_power_mult: float = 1.0
-## Недавнее движение мыши (x: лево/право, y: низ/верх) — задаёт угол/плоскость удара
-## на отпускании. Копится во время замаха, плавно затухает → важно движение У САМОГО
-## отпускания («двинул камеру и ударил»).
-var _aim_drag: Vector2 = Vector2.ZERO
 
 @onready var camera: Camera3D = $Camera3D
 ## «Руки»: второй коллайдер игрока, занимающий зазор между капсулой и схваченным торцом бревна.
@@ -249,20 +208,17 @@ var _aim_drag: Vector2 = Vector2.ZERO
 @onready var chop_ray: ShapeCast3D = $Camera3D/ChopRay
 @onready var axe: Node3D = $Camera3D/Axe
 @onready var prompt: RichTextLabel = $HUD/Prompt
-@onready var hp_bar: ProgressBar = $HUD/HpBar
-@onready var hp_label: Label = $HUD/HpBar/HpLabel
-## Меши конечностей для простой код-анимации (#9.3): руки тянутся к тачке/бревну при волоке/
-## толкании, ноги шагают при ходьбе. Тело скрыто от камеры от 1-го лица (cast_shadow =
-## shadows_only), поэтому анимацию видно по ТЕНИ игрока (и через фрикам, если вернуть видимость).
+## Компонент здоровья (узел-ребёнок Health): фасад take_damage() шлёт урон сюда.
+@onready var _health: Node = $Health
+## Машина состояний (узел-ребёнок): ей делегируем подсказку и контекстное E активного состояния.
+@onready var _state_machine: Node = $StateMachine
+## Корень меша-тела игрока: его позицию гасим вместе с камерой при переступе (см. _process).
+## Сами конечности (руки/ноги) анимирует отдельный узел-компонент LimbAnimator (#9.3) — он
+## читает состояние игрока через held_barrow()/dragged_log(). Тело скрыто от FP-камеры
+## (shadows_only), поэтому анимацию видно по ТЕНИ игрока (и через фрикам, если вернуть видимость).
 @onready var _model: Node3D = $Model
-@onready var _arm_l: Node3D = $Model/ArmL
-@onready var _arm_r: Node3D = $Model/ArmR
-@onready var _leg_l: Node3D = $Model/LegL
-@onready var _leg_r: Node3D = $Model/LegR
 ## База позиции тела — от неё гасим переступ так же, как камеру (#1: иначе торс «прыгал» в кадр).
 var _model_base: Vector3 = Vector3.ZERO
-## Фаза шагательного цикла (рад): растёт, пока игрок идёт по земле; задаёт качание ног/рук.
-var _walk_phase: float = 0.0
 
 
 func _ready() -> void:
@@ -274,34 +230,43 @@ func _ready() -> void:
 	# Запоминаем «родную» локальную позицию камеры — от неё сглаживаем переступ (смещаем/возвращаем).
 	_cam_base = camera.position
 	_model_base = _model.position
-	# Топор сообщает момент укуса лезвия — тогда и считаем попадание.
-	axe.impact.connect(_on_axe_impact)
-	# Полное здоровье на старте + сразу отрисовать полоску.
-	_hp = max_hp
-	_update_hp_bar()
 
 
-## Вычесть урон по HP (зовётся бревном при ударе). На нуле — смерть.
+## Фасад урона: внешний код (бревно при ударе, falling_log.gd) зовёт player.take_damage(),
+## а считает HP/смерть компонент Health. Так публичный API игрока не изменился при выносе HP.
 func take_damage(amount: float) -> void:
-	if amount <= 0.0 or _hp <= 0.0:
-		return
-	_hp = clampf(_hp - amount, 0.0, max_hp)
-	_update_hp_bar()
-	if _hp <= 0.0:
-		_die()
+	_health.take_damage(amount)
 
 
-func _die() -> void:
-	print("СМЕРТЬ: HP кончились. Перезапуск сцены.")
-	get_tree().reload_current_scene()
+# --- Публичный read-API для дочерних компонентов (LimbAnimator и будущих узлов). ---
+# Player остаётся «диспетчером»: компоненты НЕ лезут в его приватные _barrow/_dragged напрямую,
+# а спрашивают через эти геттеры — так состояние инкапсулировано и его легко переносить.
+
+## Тачка в руках (или null).
+func held_barrow() -> Wheelbarrow:
+	return _barrow
 
 
-# Красная полоска HP слева снизу: заполнение по доле здоровья, цифра — целые HP.
-func _update_hp_bar() -> void:
-	if hp_bar:
-		hp_bar.value = _hp / maxf(max_hp, 0.01) * 100.0
-	if hp_label:
-		hp_label.text = "%.0f" % _hp
+## Бревно на волоке (или null).
+func dragged_log() -> FallingLog:
+	return _dragged
+
+
+## Несомое на плече бревно (или null) — рубка бьёт слабее, если рука занята им.
+func carried_log() -> FallingLog:
+	return _carried
+
+
+## Можно ли сейчас рубить топором: топор в руке (не убран) и мы не на волоке. Решает Player,
+## т.к. зависит от его состояния; ChopController спрашивает это перед началом замаха.
+func can_chop() -> bool:
+	return not _axe_stowed and _dragged == null
+
+
+## Добавить импульс отдачи к камере (зовёт ChopController при попадании). Накопление и затухание
+## _kick, и его наложение на камеру — в _process игрока (вместе с наклоном взгляда и free-look тачки).
+func add_camera_kick(delta_kick: Vector3) -> void:
+	_kick += delta_kick
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -340,11 +305,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			deg_to_rad(-max_look_angle),
 			deg_to_rad(max_look_angle)
 		)
-		# Во время замаха то же движение мыши копим как угол будущего удара: камера
-		# крутится, А топор «прицеливается». Право/вверх мыши = право/вверх удара.
-		if _charging:
-			_aim_drag.x += event.relative.x * drag_sensitivity
-			_aim_drag.y += -event.relative.y * drag_sensitivity
 
 	# E — поднять бревно, на которое смотрим / бросить то, что несём.
 	if event.is_action_pressed("interact") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -357,29 +317,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
-	# Рубка: зажал ЛКМ — топор в замах (целимся); отпустил — удар под текущим углом.
-	if event.is_action_pressed("chop") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED \
-			and not _axe_stowed and _dragged == null:
-		# Прерывающий удар (#4): начали замах, пока прошлый ещё доигрывал. begin_windup вернёт false,
-		# если удар ещё рано прерывать — тогда клик игнорируем (топор доигрывает удар, без дёрганья #2).
-		var was_busy: bool = axe.is_busy()
-		# Сторону взвода берём из текущего A/D (#2): если зажат A/D — топор сразу заносится для
-		# горизонтального маха в нужную сторону, а не дёргается на месте при отпускании.
-		var move0 := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-		if axe.begin_windup(Vector2(move0.x, -move0.y)):
-			_charging = true
-			_chop_charging_interrupted = was_busy
-			_charge_start_s = Time.get_ticks_msec() / 1000.0
-			_aim_drag = Vector2.ZERO
-	elif event.is_action_released("chop") and _charging:
-		var move := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-		var aim := Vector2(move.x, -move.y) + _aim_drag
-		aim.x = clampf(aim.x, -1.0, 1.0)
-		aim.y = clampf(aim.y, -1.0, 1.0)
-		_last_aim = aim
-		_charging = false
-		_chop_power_mult = _compute_chop_power(aim)
-		axe.release_strike(aim)
+	# Рубка (зажать/отпустить ЛКМ) обрабатывает компонент ChopController в своём _unhandled_input.
 
 
 func _process(delta: float) -> void:
@@ -400,91 +338,7 @@ func _process(delta: float) -> void:
 	# _step_offset, тело визуально остаётся на месте рядом с камерой и «всплывает» так же мягко.
 	_model.position = _model_base + _step_offset
 
-	# Прицел затухает, пока целимся — важно движение мыши У САМОГО отпускания.
-	if _charging:
-		_aim_drag = _aim_drag.lerp(Vector2.ZERO, clampf(drag_decay * delta, 0.0, 1.0))
-
-	_animate_body(delta)
 	_update_prompt()
-
-
-# Простая код-анимация конечностей (#9.3, greybox). Своего AnimationPlayer/рига у игрока нет,
-# поэтому крутим меши-примитивы напрямую вокруг локальной оси X:
-#  • РУКИ при волоке/тачке — тянутся ВПЕРЁД (держат бревно/ручки), а не висят на месте;
-#  • НОГИ при ходьбе — шагают «ножницами» (одна вперёд, другая назад) по синусу _walk_phase;
-#  • РУКИ при ходьбе налегке — машут в противофазе ногам.
-# Меши вращаются вокруг своего ЦЕНТРА (бедро/плечо не выделены) — для greybox этого хватает,
-# движение читается. Тело скрыто от FP-камеры, так что эффект виден по ТЕНИ игрока на земле.
-func _animate_body(delta: float) -> void:
-	if _leg_l == null:
-		return
-	var hv := Vector3(velocity.x, 0.0, velocity.z)
-	var moving := is_on_floor() and hv.length() > 0.5
-	if moving:
-		_walk_phase += delta * 9.0
-	var swing := sin(_walk_phase) * deg_to_rad(22.0) if moving else 0.0
-	var k := clampf(12.0 * delta, 0.0, 1.0)
-	# Ноги «ножницами» (в противофазе друг другу); в покое плавно возвращаются к нулю.
-	_leg_l.rotation.x = lerpf(_leg_l.rotation.x, swing, k)
-	_leg_r.rotation.x = lerpf(_leg_r.rotation.x, -swing, k)
-	# Руки НАВОДИМ на то, что держим, чтобы кисти реально сходились к предмету, а не висели рядом
-	# в воздухе (#9c.3): тачка — каждая рука к своей рукоятке; бревно — обе руки в одну точку хвата;
-	# топор — правая рука на рукоять вьюмодели (#9c.2). Свободные руки машут в противофазе ногам.
-	if _barrow != null:
-		var right := _barrow.global_transform.basis.x
-		var g := _barrow.grab_point_world()
-		_aim_arm(_arm_l, g - right * 0.32, k)
-		_aim_arm(_arm_r, g + right * 0.32, k)
-	elif _dragged != null:
-		# Наводим обе руки на РЕАЛЬНЫЙ торец бревна (grab_point_world), а не на вычисленную точку
-		# хвата выше пояса (#9e.2): иначе кисти висели заметно выше бревна. Так руки сходятся к месту,
-		# где бревно действительно лежит.
-		var g := _dragged.grab_point_world()
-		var right := global_transform.basis.x
-		_aim_arm(_arm_l, g - right * 0.18, k)
-		_aim_arm(_arm_r, g + right * 0.18, k)
-	elif axe.visible:
-		# Топор — вьюмодель в пространстве камеры (его удар сходится в перекрестье, #9g). Чтобы он
-		# выглядел зажатым в руке и рука махала вместе с ним, КАЖДЫЙ кадр наводим правую руку на
-		# топор (его origin = низ рукояти): кисть тянется к рукояти, а когда топор уходит в удар —
-		# рука следует за ним. k=1 (без сглаживания), чтобы рука не отставала от быстрого маха.
-		_aim_arm(_arm_r, axe.global_position, 1.0)
-		_swing_arm(_arm_l, -swing, k)
-	else:
-		_swing_arm(_arm_l, -swing, k)
-		_swing_arm(_arm_r, swing, k)
-
-
-# Наводим руку-меш так, чтобы её «низ» (локальный −Y, конец-кисть) указывал на точку target в мире.
-# Рука вращается вокруг плеча (центра меша): наклон вперёд/вниз (X) + разворот вбок (Y). Этого хватает,
-# чтобы кисти сводились к одному бревну и тянулись к разнесённым ручкам тачки. target переводим в локаль
-# узла Model (родитель руки), считаем направление от плеча и раскладываем на углы тангажа/рысканья.
-func _aim_arm(arm: Node3D, target_world: Vector3, k: float) -> void:
-	var model := arm.get_parent() as Node3D
-	var t_local := model.global_transform.affine_inverse() * target_world
-	var d := t_local - arm.position
-	if d.length() < 0.01:
-		return
-	d = d.normalized()
-	var pitch := acos(clampf(-d.y, -1.0, 1.0))
-	var yaw := atan2(-d.x, -d.z)
-	arm.rotation.x = lerp_angle(arm.rotation.x, pitch, k)
-	arm.rotation.y = lerp_angle(arm.rotation.y, yaw, k)
-	arm.rotation.z = lerp_angle(arm.rotation.z, 0.0, k)
-
-
-# Качание свободной руки вперёд/назад вокруг плеча (X) с плавным обнулением бокового разворота/крена.
-func _swing_arm(arm: Node3D, angle: float, k: float) -> void:
-	arm.rotation.x = lerp_angle(arm.rotation.x, angle, k)
-	arm.rotation.y = lerp_angle(arm.rotation.y, 0.0, k)
-	arm.rotation.z = lerp_angle(arm.rotation.z, 0.0, k)
-
-
-# Плавно ставим руку в фиксированную позу (Эйлеры, рад) — для удержания топора и т.п.
-func _set_arm(arm: Node3D, euler: Vector3, k: float) -> void:
-	arm.rotation.x = lerp_angle(arm.rotation.x, euler.x, k)
-	arm.rotation.y = lerp_angle(arm.rotation.y, euler.y, k)
-	arm.rotation.z = lerp_angle(arm.rotation.z, euler.z, k)
 
 
 # Подсказка под прицелом: что сделает E прямо сейчас. Тексты — через tr() (ключи в
@@ -492,64 +346,8 @@ func _set_arm(arm: Node3D, euler: Vector3, k: float) -> void:
 func _update_prompt() -> void:
 	if not prompt:
 		return
-	# Толкаем тачку — подсказка про то, что E поставит её. Вес НЕ показываем (тачка в руках —
-	# загрузку видно, когда она НЕ в руках, при наведении на неё).
-	if _barrow != null:
-		_set_prompt(tr("PROMPT_BARROW_DROP"))
-		return
-	# Несём бревно: глядя на тачку (или на бревно в её кузове) — подсказка положить (с цветной
-	# загрузкой); иначе — бросить.
-	if _carried != null:
-		var b := _aim_barrow_for_load()
-		if b != null:
-			var add := _carried.get_weight()
-			# Бревно длиннее кузова (#2: торчало бы сквозь борта — E его не положит). Вместо веса
-			# показываем КУРСИВОМ «Не влезет по размеру»: понятно, что мешает именно длина, а не вес.
-			if not b.fits_length(_carried.get_length()):
-				_set_prompt("[i]%s[/i]" % tr("PROMPT_BARROW_TOO_LONG"))
-				return
-			# По длине влезает: показываем загрузку. Цвет добавляемого веса — зелёный (влезает по весу)
-			# или красный (перегруз по max_load_kg).
-			var col := "44ff44" if b.can_load(add) else "ff4040"
-			_set_prompt(tr("PROMPT_BARROW_LOAD").format({
-				"cur": "%.0f" % b.current_load(),
-				"add": "%.0f" % add,
-				"col": col,
-				"cap": "%.0f" % b.max_load_kg}))
-			return
-		_set_prompt(tr("PROMPT_DROP").format({"kg": "%.0f" % _carried.get_weight()}))
-		return
-	if _dragged != null:
-		_set_prompt(tr("PROMPT_DROP").format({"kg": "%.0f" % _dragged.get_weight()}))
-		return
-	# Свободные руки. Навёлся на тачку — взять/толкать (с грузом показываем сколько лежит/влезет);
-	# навёлся на бревно — поднять/тащить.
-	var aim := _aim_target()
-	if aim.get("type") == "barrow":
-		var ab := aim["barrow"] as Wheelbarrow
-		var load := ab.current_load()
-		if load > 0.5:
-			# Перегруз — показываем текущий вес КРАСНЫМ (#1): сразу видно, что тачка набита сверх нормы.
-			var kg_str := "%.0f" % load
-			if ab.is_overloaded():
-				kg_str = "[color=#ff4040]%s[/color]" % kg_str
-			_set_prompt(tr("PROMPT_BARROW_GRAB_LOADED").format(
-				{"kg": kg_str, "cap": "%.0f" % ab.max_load_kg}))
-		else:
-			_set_prompt(tr("PROMPT_BARROW_GRAB"))
-		return
-	if aim.get("type") != "log":
-		_set_prompt("")
-		return
-	var log := aim["log"] as FallingLog
-	var w := log.get_weight()
-	# Посильное — берём в руки; тяжелее, но в пределах волока — тащим; ещё тяжелее — никак.
-	if w <= carry_capacity:
-		_set_prompt(tr("PROMPT_PICKUP").format({"kg": "%.0f" % w}))
-	elif w <= drag_capacity:
-		_set_prompt(tr("PROMPT_DRAG").format({"kg": "%.0f" % w}))
-	else:
-		_set_prompt(tr("PROMPT_TOO_HEAVY").format({"kg": "%.0f" % w}))
+	# Текст подсказки даёт активное состояние (Idle/Carry/Drag/Barrow), Player только центрирует.
+	_set_prompt(_state_machine.active().prompt_text())
 
 
 # Текст подсказки в RichTextLabel по центру. Центрируем bbcode-тегом [center] (у RichTextLabel
@@ -573,46 +371,12 @@ func _look_pickup_log(force: bool) -> FallingLog:
 	return null
 
 
-# E: несём/тащим — бросаем; иначе смотрим на бревно — берём в руки или тащим волоком.
+# E (interact): контекстное действие активного состояния (взять/положить/бросить). Сам разбор —
+# в узле состояния (handle_interact), Player только освежает луч прицела и делегирует.
 func _toggle_carry() -> void:
 	# Один пересчёт луча на всё контекстное E (и бревно, и тачка под прицелом — свежие).
 	chop_ray.force_shapecast_update()
-	# Толкаем тачку — ставим её.
-	if _barrow != null:
-		_stop_barrow()
-		return
-	# Несём бревно: глядя на тачку (или на бревно в её кузове) — кладём в кузов (если влезет по
-	# весу); иначе бросаем на землю.
-	if _carried != null:
-		var lb := _aim_barrow_for_load()
-		if lb != null:
-			# Грузим, если влезает ПО ДЛИНЕ. Перегруз по ВЕСУ теперь разрешён (#2): тачку можно набить
-			# сверх max_load_kg, но тогда она еле толкается (barrow_overload_mult в _drive_barrow).
-			# Слишком длинное бревно по-прежнему не лезет (торчало бы сквозь борта).
-			if lb.fits_length(_carried.get_length()):
-				_load_into_barrow(lb)
-			return
-		_drop_carried()
-		return
-	# Тащим волоком — отпускаем.
-	if _dragged != null:
-		_stop_drag()
-		return
-	# Свободные руки. Навёлся на тачку — берёмся за неё; навёлся на бревно — поднимаем/тащим.
-	var aim := _aim_target()
-	if aim.get("type") == "barrow":
-		_start_barrow(aim["barrow"])
-		return
-	if aim.get("type") != "log":
-		return
-	var log := aim["log"] as FallingLog
-	var weight := log.get_weight()
-	if weight <= carry_capacity:
-		_start_carry(log, weight)
-	elif weight <= drag_capacity:
-		_start_drag(log)
-	# Тяжелее предела волока — только тачкой (несколько раз поднести руками и сложить нельзя —
-	# тяжёлое бревно само в руки не идёт; пока остаётся «никак», прокачку добавим позже).
+	_state_machine.active().handle_interact()
 
 
 # Берём бревно в руки на плечо. Лёгкое (< доли предела) — на левое, топор в правой руке;
@@ -1054,113 +818,29 @@ func _shoulder_pose(on_left: bool) -> Transform3D:
 	return Transform3D(basis, Vector3(side, -0.05, -0.15))
 
 
-# Сила удара (#4) на отпускании ЛКМ: заряд от длительности замаха (100%→chop_power_max),
-# штраф за боковой удар A/D (масштаб по |aim.x|) и за прерывающий удар (новый замах поверх
-# недоигравшего). Итог ограничиваем потолком chop_power_max.
-func _compute_chop_power(aim: Vector2) -> float:
-	var hold := Time.get_ticks_msec() / 1000.0 - _charge_start_s
-	var charge := lerpf(1.0, chop_power_max, clampf(hold / chop_charge_time, 0.0, 1.0))
-	var side := lerpf(1.0, chop_side_power_mult, clampf(absf(aim.x), 0.0, 1.0))
-	var interrupt := chop_interrupt_power_mult if _chop_charging_interrupted else 1.0
-	return clampf(charge * side * interrupt, 0.0, chop_power_max)
-
-
-# Вызывается топором в момент удара лезвия. Тут решаем, попали ли по стволу.
-# ShapeCast — «толстый луч» (сфера r=0.15): прицел прощающий, у лезвия есть толщина.
-func _on_axe_impact() -> void:
-	chop_ray.force_shapecast_update()
-	if not chop_ray.is_colliding():
-		return
-	# Что-то задели лезвием — даём варьирующуюся отдачу камере.
-	_apply_kick()
-
-	# Индекс 0 — ближайшее попадание (результаты идут от близких к дальним).
-	var target := chop_ray.get_collider(0)
-	if target == null:
-		return
-	var point := chop_ray.get_collision_point(0)
-	var normal := chop_ray.get_collision_normal(0)
-
-	# Сила удара = насколько он ПЕРПЕНДИКУЛЯРЕН стволу. В лоб (взгляд против нормали) —
-	# полный урон/глубокая зарубка; вскользь — слабо. perp: 0 (касательно)..1 (в лоб).
-	var forward := -camera.global_transform.basis.z
-	var perp := clampf(forward.dot(-normal), 0.0, 1.0)
-	var power := lerpf(0.35, 1.3, perp)
-	# Сила замаха (#4): дольше держал ЛКМ → сильнее (до chop_power_max); боковой удар A/D и
-	# прерывающий удар — слабее. Множитель посчитан на отпускании в _compute_chop_power.
-	power *= _chop_power_mult
-	# Несём бревно на левом плече (топор в правой руке) — бьём слабее, рука занята.
-	if _carried != null:
-		power *= carry_chop_power_mult
-
-	# Плоскость лезвия в момент удара — ось X топора (вдоль режущей кромки). По ней
-	# ориентируем зарубку (диагональный руб даёт диагональную зарубку).
-	var edge := axe.global_transform.basis.x
-
-	# Толкаем свободные физтела лезвием: лёгкие поленья сдвигаются заметно, тяжёлые брёвна
-	# почти нет (скорость = импульс/масса). Замороженные (стволы/пни) пропускаем — их не
-	# сдвинуть, только рубить. Импульс — в точку удара, поэтому полено ещё и подкручивается.
-	if target is RigidBody3D and not (target as RigidBody3D).freeze:
-		var rb := target as RigidBody3D
-		# Будим тело перед толчком: лежащее бревно (на земле ИЛИ в кузове тачки) спит и без
-		# пробуждения игнорирует импульс — по бревну в тачке «не было толчка» (#3).
-		rb.sleeping = false
-		rb.apply_impulse(forward * axe_push_impulse * power, point - rb.global_position)
-
-	# Луч попадает в дочерний TrunkBody, метод chop() — на родительском узле дерева.
-	if target.has_method("chop"):
-		target.chop(global_position, point, normal, power, edge)
-	elif target.get_parent() and target.get_parent().has_method("chop"):
-		target.get_parent().chop(global_position, point, normal, power, edge)
-
-
-# Отдача камеры от удара: тангаж в основном вверх, но с разбросом; крен/рыскание
-# случайны и слегка зависят от стороны замаха — так каждый удар ощущается иначе.
-func _apply_kick() -> void:
-	var pitch := deg_to_rad(kick_pitch_deg) * randf_range(0.5, 1.3)
-	var roll := deg_to_rad(kick_roll_deg) * randf_range(0.4, 1.0) * (1.0 if randf() < 0.5 else -1.0)
-	roll -= deg_to_rad(kick_roll_deg) * 0.5 * _last_aim.x
-	var yaw := deg_to_rad(kick_yaw_deg) * randf_range(-1.0, 1.0)
-	_kick += Vector3(pitch, yaw, roll)
-
-
-func _physics_process(delta: float) -> void:
-	# Тачка в руках — отдельный режим управления (barrow-master): ведём тачку напрямую WASD и
-	# приклеиваем игрока к ручкам. Обычную ходьбу/прыжок/степап при этом пропускаем (#3,#4,#5,#6).
-	if _barrow != null:
-		_drive_barrow(delta)
-		return
-
+# ТОНКИЙ примитив наземной локомоции: гравитация, WASD, бег/прыжок, move_and_slide, степ-ап,
+# расталкивание тел. ЧТО разрешено и насколько медленно — решает вызывающее состояние и передаёт
+# параметрами (поэтому здесь больше нет проверок _dragged/_carried):
+#  • speed_mult — итоговый множитель скорости (вес переноски / коэффициент волока / 1.0 налегке);
+#  • can_run    — разрешён ли бег (Shift); волок — нет;
+#  • can_jump   — разрешён ли прыжок; волок — нет;
+#  • jump_mult  — множитель высоты прыжка (просадка от веса; 1.0 налегке).
+# Тачка сюда НЕ заходит — у неё свой полный режим _drive_barrow (BarrowState). Волок после движения
+# ещё тянет/клампит бревно — это делает сам DragState, тут общего кода нет.
+func walk_locomotion(delta: float, speed_mult: float, can_run: bool,
+		can_jump: bool, jump_mult: float) -> void:
 	var on_floor := is_on_floor()
 
 	# Гравитация в воздухе (значение из настроек проекта).
 	if not on_floor:
 		velocity += get_gravity() * delta
 
-	# Считываем WASD как вектор и переводим в мировое направление.
-	var input_dir := Input.get_vector(
-		"move_left", "move_right", "move_forward", "move_back"
-	)
-	var direction := (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()
+	var direction := _wish_move_dir()
 
 	var speed := walk_speed
-	# Бежать можно только налегке: не во время волока.
-	if Input.is_action_pressed("run") and _dragged == null:
+	if can_run and Input.is_action_pressed("run"):
 		speed *= run_multiplier
-	# Несомое бревно замедляет: множитель зависит от веса (из ресурса LogItem).
-	speed *= _carry_speed_mult
-	# Волок медленнее обычной ходьбы. Толкать бревно ВДОЛЬ него от себя (гнать дальний конец
-	# вперёд) — почти нельзя. ВАЖНО: «толкание» считаем по ОСИ БРЕВНА, а не по взгляду игрока —
-	# иначе можно повернуть камеру и быстро толкать бревно «боком». Ось берём из самого бревна
-	# (от схваченного торца к дальнему), поэтому поворот взгляда обмануть проверку не может.
-	if _dragged != null:
-		var axis := _dragged.tail_point_world() - _dragged.grab_point_world()
-		axis.y = 0.0
-		if direction.length() > 0.01 and axis.length() > 0.01 \
-				and direction.dot(axis.normalized()) > 0.3:
-			speed *= drag_push_speed_mult
-		else:
-			speed *= _drag_speed_mult
+	speed *= speed_mult
 
 	if on_floor:
 		# На земле — мгновенная отзывчивость, прыжок.
@@ -1170,9 +850,8 @@ func _physics_process(delta: float) -> void:
 		else:
 			velocity.x = move_toward(velocity.x, 0.0, speed)
 			velocity.z = move_toward(velocity.z, 0.0, speed)
-		# Во время волока прыгать нельзя (обе руки заняты). С тачкой сюда не доходим (свой режим).
-		if Input.is_action_just_pressed("jump") and _dragged == null:
-			velocity.y = _jump_velocity * _carry_jump_mult
+		if can_jump and Input.is_action_just_pressed("jump"):
+			velocity.y = _jump_velocity * jump_mult
 	else:
 		# В воздухе — ограниченное руление: инерция сохраняется, но подправить можно.
 		if direction:
@@ -1187,9 +866,36 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 	_snap_up_step(direction)
 	_push_bodies()
-	# Волок: тянем бревно ПОСЛЕ перемещения игрока — по его свежей позиции.
-	_update_drag()
-	_clamp_to_dragged()
+
+
+# Желаемое направление хода из WASD в мировых координатах (нормализованное; ноль = нет ввода).
+func _wish_move_dir() -> Vector3:
+	var input_dir := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	return (transform.basis * Vector3(input_dir.x, 0.0, input_dir.y)).normalized()
+
+
+## Множители переноски (вес бревна на плече) — состояние Carry передаёт их в walk_locomotion.
+func carry_speed_mult() -> float:
+	return _carry_speed_mult
+
+
+func carry_jump_mult() -> float:
+	return _carry_jump_mult
+
+
+## Итоговый множитель скорости ВОЛОКА с учётом направления (для DragState). Толкать бревно ВДОЛЬ
+## него от себя (гнать дальний конец вперёд) — почти нельзя (drag_push_speed_mult). ВАЖНО: «толкание»
+## считаем по ОСИ БРЕВНА, а не по взгляду — ось берём из самого бревна, поэтому поворот камеры
+## проверку не обманет. Иначе — обычный коэффициент волока по массе (_drag_speed_mult).
+func drag_speed_factor() -> float:
+	if _dragged == null:
+		return 1.0
+	var dir := _wish_move_dir()
+	var axis := _dragged.tail_point_world() - _dragged.grab_point_world()
+	axis.y = 0.0
+	if dir.length() > 0.01 and axis.length() > 0.01 and dir.dot(axis.normalized()) > 0.3:
+		return drag_push_speed_mult
+	return _drag_speed_mult
 
 
 # Нельзя уйти от ЗАСТРЯВШЕГО бревна. Если схваченный торец отстал дальше предела (бревно
