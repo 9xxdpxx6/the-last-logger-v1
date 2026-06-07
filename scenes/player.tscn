@@ -1,14 +1,46 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene format=3 uid="uid://db67c3dd8vty1"]
 
-[ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
+[ext_resource type="Script" uid="uid://dqupj1nj2vo4j" path="res://scripts/player.gd" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/axe.tscn" id="2_axe"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 radius = 0.3
 height = 1.8
 
+[sub_resource type="BoxShape3D" id="BoxShape3D_arm"]
+size = Vector3(0.5, 1.08, 0.62)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_barrow_arm"]
+size = Vector3(0.5, 0.56, 0.42)
+
 [sub_resource type="SphereShape3D" id="ChopShape"]
 radius = 0.15
+
+[sub_resource type="StandardMaterial3D" id="PantsMat"]
+albedo_color = Color(0.13, 0.18, 0.38, 1)
+
+[sub_resource type="StandardMaterial3D" id="TorsoMat"]
+albedo_color = Color(0.4, 0.58, 0.78, 1)
+
+[sub_resource type="StandardMaterial3D" id="SkinMat"]
+albedo_color = Color(0.78, 0.62, 0.5, 1)
+
+[sub_resource type="BoxMesh" id="TorsoMesh"]
+material = SubResource("TorsoMat")
+size = Vector3(0.42, 0.7, 0.26)
+
+[sub_resource type="SphereMesh" id="HeadMesh"]
+material = SubResource("SkinMat")
+radius = 0.13
+height = 0.26
+
+[sub_resource type="BoxMesh" id="LegMesh"]
+material = SubResource("PantsMat")
+size = Vector3(0.17, 0.85, 0.22)
+
+[sub_resource type="BoxMesh" id="ArmMesh"]
+material = SubResource("SkinMat")
+size = Vector3(0.13, 0.9, 0.15)
 
 [sub_resource type="StyleBoxFlat" id="HpBarBg"]
 bg_color = Color(0.08, 0.08, 0.08, 0.7)
@@ -24,29 +56,81 @@ corner_radius_top_right = 3
 corner_radius_bottom_right = 3
 corner_radius_bottom_left = 3
 
-[node name="Player" type="CharacterBody3D" groups=["player"]]
+[node name="Player" type="CharacterBody3D" unique_id=490697308 groups=["player"]]
 collision_layer = 2
 collision_mask = 21
 script = ExtResource("1_player")
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=394475382]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
 shape = SubResource("CapsuleShape3D_player")
 
-[node name="Camera3D" type="Camera3D" parent="."]
+[node name="ArmCollision" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.96, -0.55)
+shape = SubResource("BoxShape3D_arm")
+disabled = true
+
+[node name="BarrowArmCollision" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.7, -0.46)
+shape = SubResource("BoxShape3D_barrow_arm")
+disabled = true
+
+[node name="Model" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0.2)
+
+[node name="Torso" type="MeshInstance3D" parent="Model"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.15, 0)
+mesh = SubResource("TorsoMesh")
+
+[node name="Head" type="MeshInstance3D" parent="Model"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.62, 0)
+cast_shadow = 3
+mesh = SubResource("HeadMesh")
+
+[node name="LegL" type="Node3D" parent="Model"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.11, 0.855, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="Model/LegL"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.425, 0)
+mesh = SubResource("LegMesh")
+
+[node name="LegR" type="Node3D" parent="Model"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.11, 0.855, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="Model/LegR"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.425, 0)
+mesh = SubResource("LegMesh")
+
+[node name="ArmL" type="Node3D" parent="Model"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.34, 1.45, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="Model/ArmL"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.45, 0)
+mesh = SubResource("ArmMesh")
+
+[node name="ArmR" type="Node3D" parent="Model"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.34, 1.45, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="Model/ArmR"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.45, 0)
+mesh = SubResource("ArmMesh")
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=294391225]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.73, 0)
+cull_mask = 1048575
 current = true
 
-[node name="ChopRay" type="ShapeCast3D" parent="Camera3D"]
+[node name="ChopRay" type="ShapeCast3D" parent="Camera3D" unique_id=907403564]
 shape = SubResource("ChopShape")
 target_position = Vector3(0, 0, -2.4)
-collision_mask = 4
+collision_mask = 36
 
 [node name="Axe" parent="Camera3D" instance=ExtResource("2_axe")]
 
-[node name="HUD" type="CanvasLayer" parent="."]
+[node name="HUD" type="CanvasLayer" parent="." unique_id=1150539464]
 
-[node name="Crosshair" type="Label" parent="HUD"]
+[node name="Crosshair" type="Label" parent="HUD" unique_id=481626461]
+anchors_preset = 8
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
@@ -61,21 +145,24 @@ text = "+"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="Prompt" type="Label" parent="HUD"]
+[node name="Prompt" type="RichTextLabel" parent="HUD" unique_id=1198363181]
+anchors_preset = 8
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -120.0
+offset_left = -200.0
 offset_top = 24.0
-offset_right = 120.0
-offset_bottom = 48.0
+offset_right = 200.0
+offset_bottom = 52.0
 grow_horizontal = 2
 grow_vertical = 2
-horizontal_alignment = 1
-vertical_alignment = 1
+bbcode_enabled = true
+fit_content = true
+scroll_active = false
 
-[node name="HpBar" type="ProgressBar" parent="HUD"]
+[node name="HpBar" type="ProgressBar" parent="HUD" unique_id=467277586]
+anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 16.0
@@ -83,13 +170,13 @@ offset_top = -44.0
 offset_right = 216.0
 offset_bottom = -16.0
 grow_vertical = 0
-max_value = 100.0
-value = 100.0
-show_percentage = false
 theme_override_styles/background = SubResource("HpBarBg")
 theme_override_styles/fill = SubResource("HpBarFill")
+value = 100.0
+show_percentage = false
 
-[node name="HpLabel" type="Label" parent="HUD/HpBar"]
+[node name="HpLabel" type="Label" parent="HUD/HpBar" unique_id=1895405469]
+layout_mode = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
