@@ -209,10 +209,7 @@ func chop(chopper_position: Vector3, hit_point: Vector3 = Vector3.INF,
 	# Ломается, только когда ОДНА точка добита — именно на её высоте. Форму слома задаёт,
 	# как рубили: по кругу → кол, в одну сторону → скос.
 	if _sites.is_felled(site):
-		print("Точка добита (%d ударов) — часть валится." % chops_to_fell)
 		_fell(site.local_pos.y, _sites.ring_factor(site), _sites.mean_angle(site))
-	else:
-		print("Удар засчитан (сторона: %s)." % last_chop_direction)
 
 
 # Всплеск щепок в точке удара. Летят из зарубки ВБОК и вверх — от топора, а не в лицо (#2).

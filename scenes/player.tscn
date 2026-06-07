@@ -2,6 +2,14 @@
 
 [ext_resource type="Script" uid="uid://dqupj1nj2vo4j" path="res://scripts/player.gd" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/axe.tscn" id="2_axe"]
+[ext_resource type="Script" path="res://scripts/limb_animator.gd" id="3_limb"]
+[ext_resource type="Script" path="res://scripts/chop_controller.gd" id="4_chop"]
+[ext_resource type="Script" path="res://scripts/health.gd" id="5_health"]
+[ext_resource type="Script" path="res://scripts/player_state_machine.gd" id="6_sm"]
+[ext_resource type="Script" path="res://scripts/state_idle.gd" id="7_idle"]
+[ext_resource type="Script" path="res://scripts/state_carry.gd" id="8_carry"]
+[ext_resource type="Script" path="res://scripts/state_drag.gd" id="9_drag"]
+[ext_resource type="Script" path="res://scripts/state_barrow.gd" id="10_barrow"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 radius = 0.3
@@ -184,3 +192,27 @@ grow_vertical = 2
 text = "100"
 horizontal_alignment = 1
 vertical_alignment = 1
+
+[node name="LimbAnimator" type="Node" parent="."]
+script = ExtResource("3_limb")
+
+[node name="ChopController" type="Node" parent="."]
+script = ExtResource("4_chop")
+
+[node name="Health" type="Node" parent="."]
+script = ExtResource("5_health")
+
+[node name="StateMachine" type="Node" parent="."]
+script = ExtResource("6_sm")
+
+[node name="Idle" type="Node" parent="StateMachine"]
+script = ExtResource("7_idle")
+
+[node name="Carry" type="Node" parent="StateMachine"]
+script = ExtResource("8_carry")
+
+[node name="Drag" type="Node" parent="StateMachine"]
+script = ExtResource("9_drag")
+
+[node name="Barrow" type="Node" parent="StateMachine"]
+script = ExtResource("10_barrow")
