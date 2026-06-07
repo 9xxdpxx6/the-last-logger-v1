@@ -949,7 +949,9 @@ func _drive_barrow(delta: float) -> void:
 	# она не «убегала на дистанционном управлении», отпускаем её — игрок остаётся стоять, тачка свободна.
 	var final_gap := Vector3(target.x - global_position.x, 0.0,
 			target.z - global_position.z).length()
-	if final_gap > barrow_max_gap:
+	# Пока тачка ВЫПРЯМЛЯЕТСЯ (#2), грабпойнт сильно гуляет (доворот на 90°) — НЕ отпускаем её по
+	# разрыву поводка, иначе плавное вставание на колёса срывалось бы на полпути.
+	if final_gap > barrow_max_gap and not _barrow.is_righting():
 		_stop_barrow()
 
 

@@ -37,6 +37,10 @@ class_name Wheelbarrow
 ## Сила выравнивания «на колёса» (момент на кг): не даёт опрокинуться/лечь набок.
 ## Высокая — взятая тачка держится ровно даже с грузом (без неё переворачивалась).
 @export var upright_strength: float = 120.0
+## Выпрямление при взятии (#2): как быстро тачка доворачивается из «на попа»/вверх дном на колёса.
+## Угловую скорость задаём ~ угол·right_speed (плавный ease-out), не больше right_max рад/с.
+@export var right_speed: float = 4.0
+@export var right_max: float = 6.0
 ## Доля, до которой гасим наклон (крен/тангаж) тачки в руках: 0 — мгновенно ровно,
 ## 1 — не гасить. Малое значение убирает раскачку/переворот, не трогая доворот (рысканье).
 @export var tilt_damp: float = 0.5
@@ -142,6 +146,9 @@ class_name Wheelbarrow
 @export var max_cargo_length: float = 999.0
 
 var _grabbed: bool = false
+## Идёт плавное выпрямление тачки после взятия (#2) и целевая ориентация (только рыскание).
+var _righting: bool = false
+var _right_quat: Quaternion = Quaternion.IDENTITY
 ## Командная скорость хода вдоль носа (м/с) и командное рысканье (рад/с): ведём их сами с инерцией,
 ## не читая обратно linear/angular_velocity, иначе трение груза гасит ход и гружёная тачка стоит (#2).
 var _drive_speed: float = 0.0
@@ -192,6 +199,22 @@ func _spin_wheel(wheel: Node3D, fwd: Vector3, delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# Плавное выпрямление после взятия (#2): доворачиваем корпус к вертикали угловой скоростью ~ угол
+	# (ease-out), гравитация сама опускает тачку на колёса. Пока идёт — обычную езду/climb пропускаем.
+	if _righting:
+		_keep_cargo_awake()
+		var cur := global_transform.basis.get_rotation_quaternion()
+		var d := (_right_quat * cur.inverse()).normalized()
+		if d.w < 0.0:
+			d = Quaternion(-d.x, -d.y, -d.z, -d.w)  # кратчайший путь (угол в [0..π])
+		var angle := 2.0 * acos(clampf(d.w, -1.0, 1.0))
+		var axis := Vector3(d.x, d.y, d.z)
+		if angle < deg_to_rad(3.0) or axis.length() < 1e-4:
+			_righting = false
+			angular_velocity = Vector3.ZERO
+		else:
+			angular_velocity = axis.normalized() * minf(angle * right_speed, right_max)
+		return
 	_shove_obstacles()
 	_keep_cargo_awake()
 	_climb_assist(delta)
@@ -401,8 +424,10 @@ func grab() -> void:
 	# теперь несталкивание игрока с тачкой делает сам игрок через collision_exception, см. player.)
 	center_of_mass = Vector3(0.0, 0.35, wheel_axle_z)
 	# ВЫПРЯМЛЯЕМ тачку при взятии (#2): как бы она ни лежала — на боку, НА ПОПА (носом вверх/вниз) или
-	# вверх дном — ставим её ровно «на колёса», сохраняя лишь рыскание (направление носа по горизонтали).
-	# Момент выравнивания в drive() сам с «попа» не справлялся, поэтому ориентацию задаём напрямую.
+	# вверх дном — ПЛАВНО доворачиваем её на колёса (не телепорт): запоминаем целевую вертикаль (только
+	# рыскание носа по горизонтали), а _physics_process каждый кадр доворачивает к ней угловой скоростью,
+	# гравитация при этом сама опускает тачку на колёса. Момент выравнивания в drive() с «попа» не
+	# справлялся, поэтому ведём доворот явно, но физикой — выглядит как падение из вертикали на колёса.
 	var fwd := -global_transform.basis.z
 	fwd.y = 0.0
 	if fwd.length() < 0.01:
@@ -413,7 +438,8 @@ func grab() -> void:
 		fwd = Vector3.FORWARD
 	fwd = fwd.normalized()
 	var yaw := atan2(-fwd.x, -fwd.z)
-	global_transform.basis = Basis(Vector3.UP, yaw)
+	_right_quat = Quaternion(Basis(Vector3.UP, yaw))
+	_righting = true
 	# Будим груз СРАЗУ при взятии тачки: спящее бревно «примерзает» в кузове и при наклоне/
 	# перевороте не вываливается (выглядит как фриз, #6). Разбуженное живёт физикой — выпадет, если
 	# тачку опрокинуть. Дальше его держит бодрым _keep_cargo_awake, пока тачку везут/она движется.
@@ -422,8 +448,16 @@ func grab() -> void:
 			(b as RigidBody3D).sleeping = false
 
 
+## Идёт ли сейчас плавное выпрямление после взятия (#2). Игрок по этому НЕ отпускает тачку по
+## разрыву поводка, пока она доворачивается (грабпойнт сильно гуляет при довороте на 90°).
+func is_righting() -> bool:
+	return _righting
+
+
 func release() -> void:
 	_grabbed = false
+	# Отпустили до конца выпрямления — прекращаем доворот, дальше тачка живёт обычной физикой.
+	_righting = false
 	# Поставили тачку — поднимаем центр масс ВЫШЕ оси колёс. На двух колёсах-цилиндрах тачка
 	# становится неустойчивой и заваливается вперёд/на ручки (с грузом — в сторону груза), как
 	# настоящая двухколёсная тачка, которую отпустили (#6). Лёгкий сдвиг назад (+z) — чаще
@@ -551,6 +585,10 @@ func deposit_log(log: FallingLog, aim_point: Vector3 = Vector3.INF,
 func drive(forward_input: float, yaw_input: float, fwd_speed: float, turn_speed: float,
 		delta: float) -> void:
 	if not _grabbed:
+		return
+	# Пока тачка ВЫПРЯМЛЯЕТСЯ после взятия (#2) — езду/руление не трогаем, ориентацию ведёт
+	# _physics_process; иначе drive() своим выравниванием/рысканьем перебивал бы плавный доворот.
+	if _righting:
 		return
 	sleeping = false
 	var fwd := -global_transform.basis.z
