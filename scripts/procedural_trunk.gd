@@ -58,47 +58,44 @@ func build(carves: Array) -> ArrayMesh:
 	var cols := SEGMENTS
 	var rows := RINGS + 1
 
-	# Сломанный торец (если есть) и его направление наружу по оси: верх +1, низ −1.
-	var break_dir := 0.0
-	if jagged_top:
-		break_dir = 1.0
-	elif jagged_bottom:
-		break_dir = -1.0
-
-	# Вершины боковой поверхности.
+	# Вершины боковой поверхности. Бревно может иметь слом на ОБОИХ торцах одновременно
+	# (например, после раскола середины — у половинок старый рваный конец И свежий рез).
+	# Поэтому форму слома считаем для каждого торца НЕЗАВИСИМО, а не одним break_dir.
 	for r in rows:
 		var t := float(r) / float(RINGS)
 		var y := -height * 0.5 + t * height
 		var base_r := lerpf(bottom_radius, top_radius, t)
-		# Близость к сломанному торцу: f=1 у самого торца, 0 глубже break_span.
-		var f := 0.0
-		if break_dir != 0.0:
-			var d_end := (height * 0.5 - y) if jagged_top else (y + height * 0.5)
-			if d_end < break_span:
-				f = 1.0 - d_end / break_span
-		var is_end_ring := (r == 0 and jagged_bottom) or (r == RINGS and jagged_top)
 		for c in cols:
 			var ang := TAU * float(c) / float(cols)
 			var red := _reduction(carves, y, ang)
 			var rad := base_r - red
 			var vy := y
 			var cut := clampf(red / notch_color_depth, 0.0, 1.0)
-			if f > 0.0:
+			# Обрабатываем нижний и верхний торцы по очереди — какой активен (jagged_*), тот и
+			# формуем (конус/скос/щепки). Для нормального бревна торцы дальше break_span друг
+			# от друга и не пересекаются; у короткого куска оба вклада просто складываются.
+			for end_top in [false, true]:
+				var active := jagged_top if end_top else jagged_bottom
+				if not active:
+					continue
+				var bdir := 1.0 if end_top else -1.0
+				var d_end := (height * 0.5 - y) if end_top else (y + height * 0.5)
+				if d_end >= break_span:
+					continue
+				var f := 1.0 - d_end / break_span
+				var is_end_ring := (r == RINGS) if end_top else (r == 0)
 				# Конус «в кол»: к торцу сужаем радиус и тянем вершины к острию.
 				rad -= f * f * tip_cone * 0.7
-				vy += break_dir * f * tip_cone
-				# Скос к месту рубки: плоскость торца наклонена — сторона рубки ниже
-				# (пень) / выше (торец бревна), противоположная наоборот.
+				vy += bdir * f * tip_cone
+				# Скос к месту рубки: плоскость торца наклонена.
 				if rim_bias != 0.0:
 					var sidef := cos(ang - rim_bias_angle)   # +1 на стороне рубки
-					vy += -break_dir * sidef * rim_bias * f
+					vy += -bdir * sidef * rim_bias * f
 					rad -= maxf(sidef, 0.0) * rim_bias * 0.5 * f
-				# Рваность ТОЛЬКО на самом ободе торца (не вдоль ствола): иначе боковина
-				# идёт волнами и ствол выглядит «помятым». Тело между срезом и ободом —
-				# гладкий конус/скос; клочковатость и щепки живут на крайнем кольце.
+				# Рваность/щепки — только на самом ободе торца (не вдоль ствола).
 				if is_end_ring:
 					rad += (_hash01(c * 31 + 5) - 0.5) * 2.0 * jagged_amount
-					vy += break_dir * pow(_hash01(c * 53 + 7), 3.0) * splinter_height
+					vy += bdir * pow(_hash01(c * 53 + 7), 3.0) * splinter_height
 					vy += (_hash01(c * 71 + 13) - 0.5) * 2.0 * jagged_amount
 				# Свежий срез у торца — темнее, читается как древесина.
 				cut = maxf(cut, f * 0.85)

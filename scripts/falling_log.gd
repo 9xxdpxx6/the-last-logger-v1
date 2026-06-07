@@ -78,6 +78,11 @@ var _chips_scene: PackedScene
 # кусков при расколе — чтобы половинки наследовали все настройки родителя.
 var _log_item: LogItem
 var _spawn_cfg: Dictionary = {}
+# Какие торцы этого бревна — рваный СЛОМ (а не гладкий природный/распил). Нужно при расколе:
+# у половинок исходные сломанные торцы должны ОСТАТЬСЯ рваными, а гладким стать только новый
+# срез по центру (иначе старые зарубки «затираются» в гладь — см. _split).
+var _break_bottom: bool = false
+var _break_top: bool = false
 
 # Гашение вращения на ВРЕМЯ падения — низкое, чтобы гравитация свободно валила.
 const FALL_ANGULAR_DAMP := 0.1
@@ -89,6 +94,10 @@ const LAUNCH_STALL_SPEED := 0.15
 const DETACH_ANGLE := 80.0
 # Если ствол упёрся и завис под углом без вращения столько секунд — тоже считаем, что лёг.
 const REST_DETACH_TIME := 0.5
+# На сколько радиус коллизии бревна МЕНЬШЕ видимого меша (#log-gap). Компенсирует margin Jolt и
+# то, что плоские грани низкополигонального цилиндра лежат внутри номинального радиуса — иначе
+# бревно «висит» над землёй/соседним бревном на пару см. Поверхность меша слегка утапливается.
+const COLLISION_SHRINK := 0.015
 
 
 ## Запускает падение. fall_direction — горизонтальное направление падения; length и
@@ -149,9 +158,24 @@ func setup_item(item: LogItem, cfg: Dictionary, length: float,
 	mass = _log_mass
 
 
-## Вес бревна (кг) — для HUD и системы переноски (замедление считает игрок).
+## ОТОБРАЖАЕМЫЙ вес бревна (кг) — для HUD и грузоподъёмности (нести/тащить/тачка). Это НЕ
+## физическая масса (mass): реальное бревно слишком тяжёлое, чтобы его носил человек, поэтому
+## игроку показываем «рабочий» вес в несколько раз меньше (см. LogItem.display_weight). Физику
+## (удар/инерцию/толкание) считает настоящая mass — этот множитель её не трогает.
 func get_weight() -> float:
-	return _log_mass
+	if _log_item:
+		return _log_item.display_weight(_log_mass)
+	return _log_mass * 0.2
+
+
+## Длина бревна по локальной оси Y (м) — для укладки в кузов тачки.
+func get_length() -> float:
+	return _length
+
+
+## Радиус (полутолщина, м) — для шага стопки брёвен в кузове.
+func get_radius() -> float:
+	return _radius
 
 
 # Удар по ЛЕЖАЧЕМУ бревну: растим зарубку в точке попадания (тот же путь, что у ствола).
@@ -163,7 +187,7 @@ func chop(chopper_position: Vector3, hit_point: Vector3 = Vector3.INF,
 		return
 	if not hit_point.is_finite():
 		return
-	_spawn_chips(hit_point, chopper_position)
+	_spawn_chips(hit_point, hit_normal)
 	# Зарубку поворачиваем по лезвию топора в момент удара (вдоль/поперёк лежачего бревна).
 	var local_point := _mesh.to_local(hit_point)
 	var local_edge := _mesh.global_transform.basis.inverse() * edge_dir
@@ -188,16 +212,37 @@ func _rebuild() -> void:
 	_mesh.mesh = _gen.build(carves)
 
 
-func _spawn_chips(point: Vector3, chopper_position: Vector3) -> void:
+func _spawn_chips(point: Vector3, surface_normal: Vector3) -> void:
 	if _chips_scene == null:
 		return
 	var chips := _chips_scene.instantiate()
 	get_tree().current_scene.add_child(chips)
 	chips.global_position = point
-	var dir := chopper_position - point
-	dir.y = 0.0
-	if dir.length() > 0.01:
-		chips.look_at(point + dir.normalized(), Vector3.UP)
+	chips.look_at(point + chip_spray_dir(surface_normal), Vector3.UP)
+	# Залп — ТОЛЬКО после установки позиции/ориентации (см. chips.gd: иначе щепки летят из 0,0,0).
+	chips.burst()
+
+
+## Направление вылета щепок: НАРУЖУ из зарубки (по нормали поверхности), уведённое В СТОРОНУ и
+## чуть ВВЕРХ — так щепки летят от топора вбок, а не в лицо игроку (#2). Сторона и углы случайны,
+## поэтому каждый удар выглядит по-своему. Статик — тем же пользуется и стоячее дерево (tree.gd).
+static func chip_spray_dir(surface_normal: Vector3) -> Vector3:
+	var base := surface_normal
+	base.y = 0.0
+	if base.length() < 0.01:
+		base = Vector3.FORWARD
+	base = base.normalized()
+	# Горизонтальная «вбок» ось (перпендикулярно нормали) — главное направление разлёта.
+	var side := base.cross(Vector3.UP)
+	if side.length() < 0.01:
+		side = Vector3.RIGHT
+	side = side.normalized()
+	# В случайную сторону + немного вверх (от земли) + чуть наружу из зарубки. Доля наружу мала,
+	# поэтому в лицо (вдоль нормали к игроку) щепки практически не идут.
+	var dir := side * (1.0 if randf() < 0.5 else -1.0)
+	dir += Vector3.UP * randf_range(0.3, 1.0)
+	dir += base * randf_range(0.0, 0.5)
+	return dir.normalized()
 
 
 # Фабрика бревна: строит RigidBody с мешом/коллизией, формует слом на нужных торцах,
@@ -243,10 +288,18 @@ static func spawn(parent: Node, cfg: Dictionary, world_xf: Transform3D,
 
 	var col := CollisionShape3D.new()
 	var cs := CylinderShape3D.new()
-	cs.height = length
-	cs.radius = maxf(bottom_r, top_r)
+	# Видимый меш в местах СЛОМА выступает за номинальный цилиндр: конус-вершина (tip_cone) и
+	# щепки (splinter_height) торчат за торец, рваность (jagged_amount) — за радиус. Если коллизию
+	# оставить ровно по номиналу, эти выступы протыкают тонкий борт тачки и видны «сквозь стенку»
+	# (#2). Поэтому расширяем цилиндр коллизии до фактических габаритов меша: торец сломанного
+	# конца отодвигается от стенки, и просвет пропадает.
+	var over_b := (gen.tip_cone * 1.3 + gen.splinter_height * 0.5) if break_bottom else 0.0
+	var over_t := (gen.tip_cone * 1.3 + gen.splinter_height * 0.5) if break_top else 0.0
+	cs.height = length + over_b + over_t
+	cs.radius = maxf(0.03, maxf(bottom_r, top_r) - COLLISION_SHRINK)
 	col.shape = cs
-	col.position.y = length * 0.5
+	# Центр цилиндра смещаем, если торцы расширены несимметрично (рваный только один конец).
+	col.position.y = length * 0.5 + (over_t - over_b) * 0.5
 	body.add_child(col)
 
 	# Следим за контактами: нужно, чтобы при подъёме/волоке бревна разбудить лежащие НА нём
@@ -256,6 +309,9 @@ static func spawn(parent: Node, cfg: Dictionary, world_xf: Transform3D,
 
 	parent.add_child(body)
 	body.global_transform = world_xf
+	# Запоминаем, какие торцы — рваный слом: при будущем расколе их нельзя «сгладить».
+	body._break_bottom = break_bottom
+	body._break_top = break_top
 
 	# Тюнинг падения/лежания — из конфига (одно место правки на все куски).
 	body.initial_tip_speed = cfg.get("initial_tip_speed", 0.5)
@@ -301,21 +357,23 @@ func _split(site) -> void:
 	var xf := global_transform
 	var axis_y := xf.basis.y.normalized()
 
-	# Нижняя половина: от торца тела до реза. Свежий слом — сверху.
+	# Нижняя половина: от торца тела до реза. Низ — ИСХОДНЫЙ торец (сохраняем его рваность,
+	# если он был сломом), верх — СВЕЖИЙ рез по центру (всегда рваный).
 	var len_a := cut_y
 	if len_a >= min_len:
 		var pa := FallingLog.spawn(parent, _spawn_cfg, xf, len_a, br, r_cut,
-				ring, ang, false, true)
+				ring, ang, _break_bottom, true)
 		pa.place_resting()
 
 	# Верхняя половина: от реза до верха. Origin сдвигаем на cut_y вдоль оси (+ зазор,
-	# чтобы половинки не пересекались коллизией и не расталкивались). Свежий слом — снизу.
+	# чтобы половинки не пересекались коллизией и не расталкивались). Низ — СВЕЖИЙ рез (рваный),
+	# верх — ИСХОДНЫЙ торец (сохраняем его рваность).
 	var len_b := total - cut_y
 	if len_b >= min_len:
 		var xf_b := xf
 		xf_b.origin = xf * Vector3(0.0, cut_y, 0.0) + axis_y * 0.03
 		var pb := FallingLog.spawn(parent, _spawn_cfg, xf_b, len_b, r_cut, tr,
-				ring, ang, true, false)
+				ring, ang, true, _break_top)
 		pb.place_resting()
 
 	queue_free()
@@ -490,7 +548,10 @@ func _apply_impact_damage() -> void:
 			continue
 		# Обрезаем сверху: разовые «выбросы» от расталкивания не должны мгновенно убивать.
 		speed = minf(speed, max_damage_speed)
-		var damage := _log_mass * speed * damage_scale
+		# Урон считаем по ОТОБРАЖАЕМОМУ («рабочему») весу, а не по реальной массе: иначе утроение
+		# плотности (для инерции/толкания) утроило бы и урон — лёгкое катящееся бревно убивало бы
+		# мгновенно. Большое падающее бревно всё равно бьёт насмерть, мелкое — терпимо.
+		var damage := get_weight() * speed * damage_scale
 		if player.has_method("take_damage"):
 			player.take_damage(damage)
 			_dmg_cd = hit_cooldown

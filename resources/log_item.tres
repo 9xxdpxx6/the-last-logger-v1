@@ -4,5 +4,5 @@
 
 [resource]
 script = ExtResource("1_logitem")
-density = 525.0
+density = 1575.0
 min_length = 0.35
