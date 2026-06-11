@@ -7,6 +7,15 @@ func physics_update(delta: float) -> void:
 
 
 func prompt_text() -> String:
+	# Навёл на свободное бревно — подсказка «доложить ещё» (если влезает в остаток грузоподъёмности),
+	# иначе «руки заняты» курсивом (#carry-multi).
+	var aim := _player._aim_target()
+	if aim.get("type") == "log":
+		var log := aim["log"] as FallingLog
+		var w := log.get_weight()
+		if _player.can_carry_more(w):
+			return tr("PROMPT_PICKUP").format({"kg": "%.0f" % w})
+		return "[i]%s[/i]" % tr("PROMPT_CARRY_FULL")
 	var c := _player.carried_log()
 	var b := _player._aim_barrow_for_load()
 	if b != null:
@@ -26,11 +35,22 @@ func prompt_text() -> String:
 
 
 func handle_interact() -> void:
+	# 1) Навёл на ПОСИЛЬНОЕ свободное бревно — доложить на то же плечо стопкой, если влезает в
+	#    остаток грузоподъёмности (#carry-multi). Иначе (слишком тяжёлое в сумме) — ничего не делаем,
+	#    чтобы случайно не уронить стопку.
+	var aim := _player._aim_target()
+	if aim.get("type") == "log":
+		var log := aim["log"] as FallingLog
+		var w := log.get_weight()
+		if _player.can_carry_more(w):
+			_player._add_carry(log, w)
+		return
+	# 2) Навёл на тачку — грузим ВЕРХНЕЕ бревно стопки (по длине; перегруз по весу разрешён, #2).
 	var c := _player.carried_log()
 	var lb := _player._aim_barrow_for_load()
 	if lb != null:
-		# Грузим, если влезает ПО ДЛИНЕ. Перегруз по ВЕСУ разрешён (#2) — тачка тогда еле толкается.
 		if lb.fits_length(c.get_length()):
 			_player._load_into_barrow(lb)
 		return
+	# 3) Иначе (смотрим в пустоту/на землю) — кладём верхнее бревно стопки на землю.
 	_player._drop_carried()

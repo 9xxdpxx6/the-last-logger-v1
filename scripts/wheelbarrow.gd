@@ -149,6 +149,9 @@ var _grabbed: bool = false
 ## Идёт плавное выпрямление тачки после взятия (#2) и целевая ориентация (только рыскание).
 var _righting: bool = false
 var _right_quat: Quaternion = Quaternion.IDENTITY
+## Отложенный телепорт позиции (применяется в _integrate_forces, #barrow-grab).
+var _tp_pending: bool = false
+var _tp_origin: Vector3 = Vector3.ZERO
 ## Командная скорость хода вдоль носа (м/с) и командное рысканье (рад/с): ведём их сами с инерцией,
 ## не читая обратно linear/angular_velocity, иначе трение груза гасит ход и гружёная тачка стоит (#2).
 var _drive_speed: float = 0.0
@@ -196,6 +199,25 @@ func _spin_wheel(wheel: Node3D, fwd: Vector3, delta: float) -> void:
 	# Ось качения (цапфа) — локальный Y колеса: цилиндр повёрнут так, что его длинная ось Y
 	# лежит горизонтально поперёк хода тачки. Вокруг неё колесо и катится.
 	wheel.rotate_object_local(Vector3.UP, da)
+
+
+## Надёжный ТЕЛЕПОРТ позиции (#barrow-grab): прямой global_position на симулируемом Jolt-теле
+## физшаг может проигнорировать, поэтому переносим через _integrate_forces (там transform применяется
+## гарантированно). Ориентацию НЕ трогаем — её плавно доводит выпрямление (grab → _righting).
+func teleport_to(origin: Vector3) -> void:
+	_tp_origin = origin
+	_tp_pending = true
+	sleeping = false
+
+
+func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
+	if _tp_pending:
+		var xf := state.transform
+		xf.origin = _tp_origin
+		state.transform = xf
+		state.linear_velocity = Vector3.ZERO
+		state.angular_velocity = Vector3.ZERO
+		_tp_pending = false
 
 
 func _physics_process(delta: float) -> void:
@@ -411,7 +433,26 @@ func grab_point_world() -> Vector3:
 	return _grab_point.global_position
 
 
-func grab() -> void:
+## РЕЕЛ-ИН (#barrow-reel): игрок держит тачку за ручки. Тянем САМУ ТАЧКУ к рукам ТОЛЬКО когда точка
+## хвата ПРОВАЛИЛАСЬ НИЖЕ рук больше чем на slack — т.е. тачка свалилась с уступа/в яму. Триггер именно
+## по ВЕРТИКАЛИ, чтобы НЕ мешать обычной езде и подъёму В ГОРКУ (там хват на уровне/выше рук → реел
+## молчит, нет дёрганья). hand — мировая позиция рук. Зовётся ПОСЛЕ drive() → выставляем скорость к
+## рукам (не импульсом — копился бы); как только подняли (провал ≤ slack), drive/гравитация снова рулят.
+func reel_toward(hand: Vector3, gain: float, max_speed: float, slack: float) -> void:
+	if not _grabbed or _righting:
+		return
+	var gp := grab_point_world()
+	var drop := hand.y - gp.y  # на сколько хват НИЖЕ рук игрока
+	if drop <= slack:
+		return
+	sleeping = false
+	var d := hand - gp  # тянем к рукам (вверх + к игроку) — тачка вылезает из-под уступа
+	linear_velocity = d / maxf(d.length(), 0.01) * minf((drop - slack) * gain, max_speed)
+
+
+## target_yaw (рад) — желаемое рыскание носа после выпрямления. Если задано (игрок «призывает» тачку
+## к себе, #barrow-grab), доворачиваем носом по игроку; иначе сохраняем текущее направление носа.
+func grab(target_yaw: float = INF) -> void:
 	_grabbed = true
 	sleeping = false
 	# Гасим прежнюю скорость — взяли тачку, она не должна «доезжать» по инерции.
@@ -428,16 +469,20 @@ func grab() -> void:
 	# рыскание носа по горизонтали), а _physics_process каждый кадр доворачивает к ней угловой скоростью,
 	# гравитация при этом сама опускает тачку на колёса. Момент выравнивания в drive() с «попа» не
 	# справлялся, поэтому ведём доворот явно, но физикой — выглядит как падение из вертикали на колёса.
-	var fwd := -global_transform.basis.z
-	fwd.y = 0.0
-	if fwd.length() < 0.01:
-		# Нос смотрит вертикально (тачка на попа) — рыскание берём по другой оси корпуса.
-		fwd = global_transform.basis.y
+	var yaw: float
+	if is_finite(target_yaw):
+		yaw = target_yaw
+	else:
+		var fwd := -global_transform.basis.z
 		fwd.y = 0.0
-	if fwd.length() < 0.01:
-		fwd = Vector3.FORWARD
-	fwd = fwd.normalized()
-	var yaw := atan2(-fwd.x, -fwd.z)
+		if fwd.length() < 0.01:
+			# Нос смотрит вертикально (тачка на попа) — рыскание берём по другой оси корпуса.
+			fwd = global_transform.basis.y
+			fwd.y = 0.0
+		if fwd.length() < 0.01:
+			fwd = Vector3.FORWARD
+		fwd = fwd.normalized()
+		yaw = atan2(-fwd.x, -fwd.z)
 	_right_quat = Quaternion(Basis(Vector3.UP, yaw))
 	_righting = true
 	# Будим груз СРАЗУ при взятии тачки: спящее бревно «примерзает» в кузове и при наклоне/

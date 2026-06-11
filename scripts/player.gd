@@ -75,6 +75,12 @@ class_name Player
 ## Доля грузоподъёмности, ниже которой бревно несут на ЛЕВОМ плече (топор в правой руке),
 ## а на/выше — на правом плече (топор убран в карман до сброса).
 @export var shoulder_left_fraction: float = 0.4
+## Поза несомой связки брёвен в локале тела (#carry-level): вбок от центра (X), высота плеча (Y),
+## сдвиг назад (Z, +Z = за спину). Сбоку держим связку дальше радиуса бревна, чтобы она не лезла в
+## камеру. Брёвна лежат горизонтально и поворачиваются с телом (не с камерой).
+@export var carry_side: float = 0.45
+@export var carry_height: float = 1.45
+@export var carry_back: float = 0.3
 # Сила удара/заряд/боковой штраф и отдача камеры переехали на компонент ChopController (его и крути).
 ## Предел ВОЛОКА (кг): бревно тяжелее грузоподъёмности, но не тяжелее этого, можно тащить
 ## волоком. Тяжелее — никак (позже: тачка/прокачка). 170.49: бревно, показывающее «170 кг»
@@ -152,13 +158,56 @@ class_name Player
 ## игрок↔ручки (по горизонтали, сверх свободного хода) превысил это — тачку отпускаем (игрок встаёт).
 ## Должно быть заметно больше grab_distance+barrow_play, чтобы обычная езда/доворот не отпускали.
 @export var barrow_max_gap: float = 0.7
+## Плавность следования за тачкой (#barrow-follow). Раньше игрок «закрывал» отставание за один кадр
+## (скорость = слэк/delta) — выходил рывок «как провод». Теперь скорость = слэк·gain (пружина, с
+## потолком), и ведётся к цели ПЛАВНО (smooth). Жёсткую подтяжку тоже смягчили (leash_pull — доля/с).
+@export var barrow_follow_gain: float = 25.0
+@export var barrow_follow_smooth: float = 16.0
+## Наклон камеры «тачка тянет» (#barrow-drag): рад на метр отставания (вперёд/вбок), предел и плавность.
+## Маленький базовый — занос едва заметен пустой тачкой; с грузом домножается до ×1.5 (см. _drive_barrow).
+@export var barrow_lean_gain: float = 0.12
+@export var barrow_lean_max: float = 0.14
+@export var barrow_lean_smooth: float = 9.0
+## Доля хода/поворота, остающаяся при упоре в непроходимое (#barrow-struggle): 0 — глухой стоп (как
+## раньше), 0.15 — застрявшую тачку можно медленно продавить/вытолкать с усилием.
+@export var barrow_struggle_mult: float = 0.15
+## РЕЕЛ-ИН (#barrow-reel): держим тачку за ручки — если хват ПРОВАЛИЛСЯ ниже рук больше slack (тачка
+## упала с уступа/в яму), тянем её к рукам (gain — сила, max — потолок). Триггер по вертикали, чтобы
+## подъём В ГОРКУ не дёргало. Так упавшую тачку можно выволочь, а не обходить/пинать топором.
+@export var barrow_reel_slack: float = 0.5
+@export var barrow_reel_gain: float = 6.0
+@export var barrow_reel_max: float = 4.0
+## СПОТЫКАНИЕ при авто-отпускании тачки (#barrow-stumble): тачку «вырвало» из рук — игрок по инерции
+## клюёт вперёд. stumble_speed — рывок вперёд (м/с), dip/forward — просадка камеры (м), pitch/roll —
+## клевок/шатание взгляда (град). Всё затухает штатно (_kick / _step_offset).
+@export var stumble_speed: float = 1.0
+@export var stumble_dip: float = 0.22
+@export var stumble_forward: float = 0.08
+@export var stumble_pitch_deg: float = 5.0
+@export var stumble_roll_deg: float = 9.0
+## Потолок скорости инерции (м/с) в момент спотыкания: сохранённую скорость следования зажимаем,
+## иначе глайд слишком быстрый и читается как рывок, а не «несёт» (#barrow-inertia).
+@export var stumble_max_speed: float = 3.0
+## Окно «потери управления» при спотыкании (с): пока идёт, ВВОД НЕ перебивает скорость, инерция
+## сохраняется и плавно гаснет (stumble_friction) — игрока реально несёт вперёд, как при спотыкании.
+@export var stumble_time: float = 0.9
+@export var stumble_friction: float = 1.4
+## Во сколько раз спотыкание СИЛЬНЕЕ при сбросе тачки с ОБРЫВА (#barrow-stumble), чем при обычном
+## отставании: падение в пропасть дёргает резче. Итог ещё домножается на (0.6 + доля груза).
+@export var barrow_stumble_cliff_mult: float = 1.8
 
 # Здоровье (max_hp, урон, полоска, смерть) — на компоненте Health (узел-ребёнок). Player —
 # фасад: take_damage() пересылает туда. Тунинг max_hp крути на узле Health.
 
 var _jump_velocity: float = 0.0
-## Несомое бревно (или null). Несёшь — медленнее ходишь, тяжёлое — сильнее.
-var _carried: FallingLog = null
+## Несомые на плече брёвна (стек, #carry-multi). Несём несколько — на ТОМ ЖЕ плече, что и первое,
+## стопкой; суммарный вес ограничен carry_capacity. Топор виден только пока несём ОДНО бревно на
+## левом плече; от двух и более — убран (заняты оба плеча). Скорость/прыжок режутся по сумме веса.
+var _carried_logs: Array[FallingLog] = []
+## Суммарный «рабочий» вес несомого (кг) — для лимита грузоподъёмности и замедления.
+var _carry_total: float = 0.0
+## Плечо несомой стопки (true — левое): задаёт ПЕРВОЕ бревно, остальные кладутся туда же.
+var _carry_on_left: bool = true
 ## Текущий множитель скорости от веса в руках (1 — налегке).
 var _carry_speed_mult: float = 1.0
 ## Текущий множитель высоты прыжка от веса в руках (1 — налегке).
@@ -189,12 +238,18 @@ var _pre_move_pos: Vector3 = Vector3.ZERO
 var _wish_speed: float = 0.0
 ## Топор убран (несём тяжёлое бревно на правом плече) — рубить нельзя.
 var _axe_stowed: bool = false
+## Наклон камеры от тяги тачки (#barrow-drag): x — тангаж (вперёд/назад), y — крен (вбок). Цель
+## задаётся в _drive_barrow по отставанию, плавно сходится в _process.
+var _barrow_lean: Vector2 = Vector2.ZERO
+var _barrow_lean_target: Vector2 = Vector2.ZERO
 ## Наклон взгляда вверх/вниз (рад). Храним отдельно, чтобы кик камеры можно было
 ## накладывать поверх, не ломая ограничение обзора.
 var _look_pitch: float = 0.0
 ## Текущая отдача камеры (рад): x — тангаж, y — рыскание, z — крен. Затухает к нулю в _process.
 ## Импульс отдачи при ударе добавляет компонент ChopController через add_camera_kick().
 var _kick: Vector3 = Vector3.ZERO
+## Остаток окна спотыкания (с): пока > 0, walk_locomotion ведёт игрока ПО ИНЕРЦИИ (#barrow-stumble).
+var _stumble_timer: float = 0.0
 
 @onready var camera: Camera3D = $Camera3D
 ## «Руки»: второй коллайдер игрока, занимающий зазор между капсулой и схваченным торцом бревна.
@@ -254,7 +309,19 @@ func dragged_log() -> FallingLog:
 
 ## Несомое на плече бревно (или null) — рубка бьёт слабее, если рука занята им.
 func carried_log() -> FallingLog:
-	return _carried
+	if _carried_logs.is_empty():
+		return null
+	return _carried_logs.back()
+
+
+## Сколько брёвен несём сейчас.
+func carried_count() -> int:
+	return _carried_logs.size()
+
+
+## Влезет ли ещё одно бревно весом w в остаток грузоподъёмности (и мы уже что-то несём).
+func can_carry_more(w: float) -> bool:
+	return not _carried_logs.is_empty() and _carry_total + w <= carry_capacity
 
 
 ## Можно ли сейчас рубить топором: топор в руке (не убран) и мы не на волоке. Решает Player,
@@ -325,8 +392,14 @@ func _process(delta: float) -> void:
 	# по рысканью (камера осматривается в секторе ±barrow_yaw_limit вокруг носа тачки, #5); без
 	# тачки рысканье камеры = только кик (тело уже повёрнуто мышью).
 	_kick = _kick.lerp(Vector3.ZERO, clampf(kick_recover_speed * delta, 0.0, 1.0))
+	# Наклон «тачка тянет» (#barrow-drag): пока держим тачку и отстаём — кренимся в сторону тяги,
+	# будто она волочёт за собой. Без тачки цель — 0, наклон плавно уходит. Это реализм вместо рывков.
+	if _barrow == null:
+		_barrow_lean_target = Vector2.ZERO
+	_barrow_lean = _barrow_lean.lerp(_barrow_lean_target, clampf(barrow_lean_smooth * delta, 0.0, 1.0))
 	var cam_yaw := _barrow_cam_yaw if _barrow != null else 0.0
-	camera.rotation = Vector3(_look_pitch + _kick.x, cam_yaw + _kick.y, _kick.z)
+	camera.rotation = Vector3(_look_pitch + _kick.x + _barrow_lean.x,
+			cam_yaw + _kick.y, _kick.z + _barrow_lean.y)
 
 	# Сглаживание переступа: в момент телепорта тела на уступ камеру визуально оставили на месте
 	# (накопили смещение, обратное прыжку — и вверх, и вперёд), теперь плавно гасим его к нулю. Так
@@ -382,13 +455,78 @@ func _toggle_carry() -> void:
 # Берём бревно в руки на плечо. Лёгкое (< доли предела) — на левое, топор в правой руке;
 # тяжёлое — на правое, топор убираем (рубить нельзя, пока несём).
 func _start_carry(log: FallingLog, weight: float) -> void:
-	var on_left := weight < carry_capacity * shoulder_left_fraction
-	_axe_stowed = not on_left
-	axe.visible = on_left
-	_carried = log
-	log.pick_up(camera, _shoulder_pose(on_left))
-	_carry_speed_mult = _carry_speed_for(weight)
-	_carry_jump_mult = _carry_jump_for(weight)
+	# ПЕРВОЕ бревно стопки: оно задаёт плечо (лёгкое — левое, топор в правой руке; тяжёлое — правое).
+	_carried_logs.clear()
+	_carry_total = 0.0
+	_carry_on_left = weight < carry_capacity * shoulder_left_fraction
+	_add_carry(log, weight)
+
+
+# Докладываем ЕЩЁ одно бревно на ТО ЖЕ плечо стопкой (#carry-multi). Вызывается из Carry, когда
+# навёлся на посильное свободное бревно и оно влезает в остаток грузоподъёмности (can_carry_more).
+func _add_carry(log: FallingLog, weight: float) -> void:
+	# Вешаем на ТЕЛО (не на камеру, #carry-level): тело только рыщет → бревно остаётся горизонтальным
+	# при взгляде вверх/вниз и не наклоняется в камеру. Реальную позу зададим в _reposition_carried.
+	log.pick_up(self, Transform3D.IDENTITY)
+	_carried_logs.append(log)
+	_carry_total += weight
+	_reposition_carried()
+	_refresh_carry_visuals()
+
+
+# Раскладка несомых брёвен по СЕЧЕНИЮ связки на плече (#carry-multi): 1 — по центру, 2 — рядом,
+# 3 — ТРЕУГОЛЬНИКОМ (два снизу, одно сверху), 4+ — рядами по два. Пересобираем ВСЮ стопку при каждом
+# добавлении/снятии, чтобы связка всегда была симметрична на плече, а не «лесенкой».
+func _reposition_carried() -> void:
+	# Раскладку считаем по РЕАЛЬНЫМ радиусам брёвен (#carry-spacing): тонкие — близко, толстые —
+	# раздвинуты, чтобы соседние касались, а не висели с зазором / не влезали друг в друга.
+	var radii: Array = []
+	for log in _carried_logs:
+		radii.append((log as FallingLog).get_radius())
+	var layout := _carry_layout(radii)
+	for i in _carried_logs.size():
+		var log := _carried_logs[i] as FallingLog
+		log.transform = _shoulder_pose(_carry_on_left, layout[i], log.body_center_y())
+
+
+# Смещения (вбок, вверх) в сечении связки для каждого бревна, считая по их РАДИУСАМ (#carry-spacing):
+# соседние брёвна касаются (расстояние центров = сумма радиусов), поэтому тонкие лежат плотно, а
+# толстые раздвинуты, а не влезают друг в друга.
+func _carry_layout(radii: Array) -> Array:
+	var n := radii.size()
+	if n <= 1:
+		return [Vector2.ZERO]
+	if n == 2:
+		# Два бревна — ОДНО НАД ДРУГИМ (#1): центры по вертикали на сумму радиусов (касаются).
+		var d: float = (float(radii[0]) + float(radii[1])) * 0.5
+		return [Vector2(0.0, -d), Vector2(0.0, d)]
+	# Для треугольника/рядов берём средний радиус (брёвна обычно близкой толщины).
+	var r := 0.0
+	for rr in radii:
+		r += float(rr)
+	r = r / float(n)
+	if n == 3:
+		# Треугольник: два снизу (центры на 2r по горизонтали), одно сверху в ложбинке. Центроид
+		# опускаем, чтобы связка сидела на плече серединой. Высота — r·√3, центроид — на трети.
+		var c := r * 0.5774  # r/√3
+		return [Vector2(-r, -c), Vector2(r, -c), Vector2(0.0, 2.0 * c)]
+	# 4 и больше — ряды по два, снизу вверх, шаг = диаметр.
+	var arr: Array = []
+	for i in n:
+		var col := -r if (i % 2 == 0) else r
+		var row := i / 2
+		arr.append(Vector2(col, float(row) * 2.0 * r))
+	return arr
+
+
+# Пересчёт замедления/прыжка по суммарному весу и видимости топора. Топор в руке только когда несём
+# РОВНО ОДНО бревно на ЛЕВОМ плече; от двух брёвен (или одно на правом) — убран (заняты оба плеча).
+func _refresh_carry_visuals() -> void:
+	_carry_speed_mult = _carry_speed_for(_carry_total)
+	_carry_jump_mult = _carry_jump_for(_carry_total)
+	var axe_in_hand := _carried_logs.size() == 1 and _carry_on_left
+	_axe_stowed = not axe_in_hand
+	axe.visible = axe_in_hand
 
 
 # Берём бревно на волок: оно остаётся на земле, мы тянем ближний торец. Обе руки заняты —
@@ -485,18 +623,22 @@ func _start_barrow(barrow: Wheelbarrow) -> void:
 	add_collision_exception_with(barrow)
 	# Включаем коллайдер «рук» под тачку: зазор между игроком и ручками физически занят.
 	barrow_arm_col.disabled = false
-	barrow.grab()
-	var bf := -barrow.global_transform.basis.z
-	bf.y = 0.0
-	if bf.length() > 0.01:
-		bf = bf.normalized()
-		rotation.y = atan2(-bf.x, -bf.z)
-		# Встаём СРАЗУ за ручками (на длину рук), лицом по ходу тачки. Иначе, взяв тачку
-		# вплотную (стоя у колеса/спереди), игрок «доходит» до ручек, упираясь в раму, и тачка
-		# катится сама. Телепорт на правильную позицию убирает этот толчок.
-		var grab := barrow.grab_point_world()
-		global_position = Vector3(grab.x - bf.x * barrow.grab_distance,
-				global_position.y, grab.z - bf.z * barrow.grab_distance)
+	# ПРИВОДИМ ТАЧКУ К ИГРОКУ (#barrow-grab): где бы она ни застряла (на боку, заклинило в геометрии,
+	# откуда не достать — только пинать топором), при взятии ставим её ПЕРЕД игроком по его взгляду и
+	# плавно выпрямляем носом ОТ игрока. Игрок остаётся на месте, где нажал E. Раньше телепортировали
+	# ИГРОКА к тачке — и он сам оказывался в недоступном месте вместе с ней.
+	var pf := -global_transform.basis.z
+	pf.y = 0.0
+	if pf.length() < 0.01:
+		pf = Vector3.FORWARD
+	pf = pf.normalized()
+	# Ставим тачку на УРОВЕНЬ ИГРОКА перед ним (#barrow-grab). Игрок стоит на твёрдой земле, поэтому
+	# его высота — заведомо досягаемое место. НЕ ищем землю лучом вниз: у края обрыва он нашёл бы землю
+	# ВНИЗУ за уступом и ронял тачку под обрыв (откуда её снова не достать). Лёгкий подъём — сядет на
+	# колёса; телепорт через _integrate_forces (надёжно для Jolt-тела), затем выпрямление носом от игрока.
+	var spot := global_position + pf * (barrow.grab_distance + 0.5)
+	barrow.teleport_to(Vector3(spot.x, global_position.y + 0.3, spot.z))
+	barrow.grab(atan2(-pf.x, -pf.z))
 	# Камера смотрит ровно по носу тачки (free-look обнуляем): дальше мышь крутит её в секторе
 	# ±barrow_yaw_limit, не двигая тачку (#5).
 	_barrow_cam_yaw = 0.0
@@ -517,6 +659,42 @@ func _stop_barrow() -> void:
 	_barrow_cam_yaw = 0.0
 
 
+# Спотыкание (#barrow-stumble): когда тачку «вырвало» из рук (авто-отпускание), игрок по инерции
+# клюёт ВПЕРЁД (в сторону dir). Даём рывок скорости + просадку/клевок камеры — всё через штатные
+# затухающие системы (_step_offset для позиции камеры, _kick для наклона), поэтому само сглаживается.
+# Есть ли земля впереди по направлению dir на расстоянии dist (луч вниз из точки впереди). Нужно
+# спотыканию (#barrow-inertia): чтобы инерция не унесла игрока ЗА ТАЧКОЙ с обрыва — у края гасим ход.
+func _ground_ahead(dir: Vector3, dist: float) -> bool:
+	var space := get_world_3d().direct_space_state
+	var from := global_position + dir * dist + Vector3.UP * 0.3
+	var q := PhysicsRayQueryParameters3D.create(from, from + Vector3.DOWN * 1.2)
+	q.exclude = [get_rid()]
+	q.collision_mask = 1 | 4 | 16
+	return not space.intersect_ray(q).is_empty()
+
+
+func _stumble(dir: Vector3, strength: float = 1.0) -> void:
+	strength = maxf(strength, 0.1)
+	var f := Vector3(dir.x, 0.0, dir.z)
+	if f.length() > 0.01:
+		f = f.normalized()
+		velocity.x += f.x * stumble_speed * strength
+		velocity.z += f.z * stumble_speed * strength
+	# ПОТОЛОК инерции (#barrow-inertia): сохранённая скорость следования могла быть большой (до ~8 м/с),
+	# и глайд читался как резкий рывок. Зажимаем горизонт до stumble_max_speed — «несёт», но не швыряет.
+	var hv := Vector3(velocity.x, 0.0, velocity.z)
+	if hv.length() > stumble_max_speed:
+		hv = hv.normalized() * stumble_max_speed
+		velocity.x = hv.x
+		velocity.z = hv.z
+	# Окно потери управления: пока идёт, walk_locomotion не сбрасывает скорость по вводу — инерция несёт.
+	_stumble_timer = stumble_time
+	# Клевок ВПЕРЁД (позиция −Z и взгляд вниз), масштаб по силе рывка. БЕЗ вертикального подброса (−Y) и
+	# случайного крена — они читались как «тряска смерти» (#barrow-drag). В _process гасятся к нулю.
+	_step_offset += Vector3(0.0, 0.0, -stumble_forward * strength)
+	_kick += Vector3(-deg_to_rad(stumble_pitch_deg * strength), 0.0, 0.0)
+
+
 # Кладём несомое бревно в кузов и возвращаем топор/руки. Бревно становится обычным физтелом
 # в тачке (упадёт в кузов поверх стопки). Доставать его потом — навестись и поднять как обычно.
 func _load_into_barrow(barrow: Wheelbarrow) -> void:
@@ -527,12 +705,11 @@ func _load_into_barrow(barrow: Wheelbarrow) -> void:
 	# бревно ложилось под углом подхода к тачке, а не всегда параллельно ей (#4).
 	var lay := -camera.global_transform.basis.z
 	lay.y = 0.0
-	barrow.deposit_log(_carried, _barrow_aim_point(barrow), lay)
-	_carried = null
-	_carry_speed_mult = 1.0
-	_carry_jump_mult = 1.0
-	_axe_stowed = false
-	axe.visible = true
+	# Грузим ВЕРХНЕЕ бревно стопки и снимаем его с плеча; остальные продолжаем нести (#carry-multi).
+	var top := _carried_logs.pop_back() as FallingLog
+	_carry_total = maxf(0.0, _carry_total - top.get_weight())
+	barrow.deposit_log(top, _barrow_aim_point(barrow), lay)
+	_after_carry_removed()
 
 
 # Точка прицела на «плоскости кузова»: луч из камеры (центр экрана) пересекаем с горизонтальной
@@ -585,7 +762,12 @@ func _drive_barrow(delta: float) -> void:
 	# взятии — её нельзя было сдвинуть (B). Стоя/назад/поворачивая обрыв не проверяем: тачку держат
 	# ровно, сама вниз она не уедет, а к краю игрок её толкнёт только вперёд.
 	if fwd_in > 0.0 and _barrow_over_cliff(bfwd):
+		# Тачка ухнула с обрыва — игрока РЕЗКО клюёт вперёд (#barrow-stumble). Сила больше обычного
+		# (cliff_mult) и растёт с грузом: гружёная тачка, срываясь вниз, дёргает сильнее. Груз берём
+		# ДО _stop_barrow (она обнулит ссылку).
+		var cliff_str := barrow_stumble_cliff_mult * (0.6 + _barrow.load_factor())
 		_stop_barrow()
+		_stumble(bfwd, cliff_str)
 		if not is_on_floor():
 			velocity += get_gravity() * delta
 		move_and_slide()
@@ -637,7 +819,9 @@ func _drive_barrow(delta: float) -> void:
 		# как игрок сам туда заходит (#1: раньше любой контакт со склоном обнулял ход и тачка вставала).
 		var fhit := KinematicCollision3D.new()
 		if test_move(global_transform, fstep, fhit) and fhit.get_normal().y <= 0.5:
-			fwd_in = 0.0
+			# НЕ глушим ход в ноль, а оставляем МАЛУЮ долю (#barrow-struggle): застрявшую тачку можно
+			# медленно «выработать» с усилием (продавить/вытолкать), а не просто встать намертво.
+			fwd_in *= barrow_struggle_mult
 	# Скорость ПОВОРОТА: при перегрузе тачку и КРУТИТЬ тяжело, но штраф ВДВОЕ слабее, чем на ход (#3) —
 	# крутиться на месте легче, чем толкать перегруз вперёд, поэтому ×2.
 	var turn_spd := barrow_turn_speed
@@ -655,9 +839,16 @@ func _drive_barrow(delta: float) -> void:
 		if orbit.length() > 0.0001:
 			var ohit := KinematicCollision3D.new()
 			if test_move(global_transform, orbit, ohit) and ohit.get_normal().y <= 0.5:
-				yaw_in = 0.0
+				# Поворот тоже не глушим, а оставляем долю (#barrow-struggle) — рулём можно медленно
+				# выкручивать застрявшую тачку.
+				yaw_in *= barrow_struggle_mult
 	# Тачку ведём с ИНЕРЦИЕЙ: разгон/торможение/доворот считает сама drive() по delta (#5b).
 	_barrow.drive(fwd_in, yaw_in, spd, turn_spd, delta)
+	# РЕЕЛ-ИН (#barrow-reel): тянем тачку к рукам, если она отстала/упала с уступа. При нормальной езде
+	# точка хвата у рук → зазор мал → тяги нет; срабатывает, только когда тачку «потеряли» — тогда её
+	# можно выволочь назад/вверх (а не обходить или пинать топором).
+	var hand := global_position + bfwd * _barrow.grab_distance + Vector3.UP * 0.88
+	_barrow.reel_toward(hand, barrow_reel_gain, barrow_reel_max, barrow_reel_slack)
 
 	# Тело смотрит ПО НОСУ тачки; камера докручивается отдельно (free-look ±barrow_yaw_limit, #5).
 	rotation.y = atan2(-bfwd.x, -bfwd.z)
@@ -678,16 +869,23 @@ func _drive_barrow(delta: float) -> void:
 	var to_t := Vector3(target.x - global_position.x, 0.0, target.z - global_position.z)
 	var dist := to_t.length()
 	var slack := maxf(dist - barrow_play, 0.0)
+	# Наклон «тачка тянет» (#barrow-drag): цель тангажа/крена по ОТСТАВАНИЮ в локале тела. Тачка ушла
+	# вперёд (−Z) → клюём вперёд; вбок → крен (это и есть «занос» в поворотах). База МАЛЕНЬКАЯ и с
+	# грузом растёт лишь до 150% (а не в максимум): пустая — еле заметно, полная — в 1.5 раза сильнее.
+	var lt := global_transform.basis.inverse() * to_t
+	var lean_w := 1.0 + 0.5 * _barrow.load_factor()  # база … 1.5×база на полном грузе
+	_barrow_lean_target = Vector2(
+			clampf(lt.z * barrow_lean_gain * lean_w, -barrow_lean_max, barrow_lean_max),
+			clampf(lt.x * barrow_lean_gain * lean_w, -barrow_lean_max, barrow_lean_max))
+	# Цель скорости ПРОПОРЦИОНАЛЬНА избытку люфта (пружина с потолком), а НЕ «закрыть слэк за один
+	# кадр» (#barrow-follow): мгновенное закрытие давало рывки «как провод». В пределах люфта цель — 0.
+	var desired_v := Vector3.ZERO
 	if dist > 0.0001 and slack > 0.0:
-		var dir := to_t / dist
-		# Догоняем только избыток люфта за кадр, но не быстрее разумного потолка (без «выстрела»).
-		var follow_speed := minf(slack / delta, spd + 4.0)
-		velocity.x = dir.x * follow_speed
-		velocity.z = dir.z * follow_speed
-	else:
-		# В пределах люфта горизонтально не подтягиваемся — гасим инерцию.
-		velocity.x = 0.0
-		velocity.z = 0.0
+		desired_v = (to_t / dist) * minf(slack * barrow_follow_gain, spd + 4.0)
+	# Скорость к цели ведём ПЛАВНО (демпфирование) — без скачков «полный газ ↔ ноль».
+	var fk := clampf(barrow_follow_smooth * delta, 0.0, 1.0)
+	velocity.x = lerpf(velocity.x, desired_v.x, fk)
+	velocity.z = lerpf(velocity.z, desired_v.z, fk)
 	# ПЕРЕСТУП В РЕЖИМЕ ТАЧКИ (#barrow-step): раньше игрок при тачке НЕ умел перешагивать (степ-ап шёл
 	# только в обычной ходьбе), а тачка через climb_assist переезжала бревно — игрок застревал, тачка
 	# уезжала. Даём тот же степ-ап и здесь: запоминаем позу/скорость до move_and_slide и после упора
@@ -699,16 +897,11 @@ func _drive_barrow(delta: float) -> void:
 	move_and_slide()
 	_snap_up_step(step_wish)
 
-	# Жёсткий поводок: если после move_and_slide игрок всё ещё ДАЛЬШЕ barrow_play (упёрся в склон/
-	# препятствие и не догнал) — подтягиваем ровно до края люфта. ВАЖНО: тянем через move_and_collide,
-	# а НЕ прямым global_position += (тот протаскивал игрока СКВОЗЬ препятствия мимо коллизий — баг с
-	# «руками»). move_and_collide упрётся в стену/дерево/коллайдер рук и остановит подтяжку на контакте.
-	var gap := Vector3(target.x - global_position.x, 0.0, target.z - global_position.z)
-	var gl := gap.length()
-	if gl > barrow_play:
-		move_and_collide(gap / gl * (gl - barrow_play))
-
-	# АВТО-ОТПУСКАНИЕ при отставании (#2): если после всех подтяжек игрок всё равно ДАЛЬШЕ barrow_max_gap
+	# Жёсткий поводок move_and_collide УБРАН (#barrow-drag): второе перемещение за кадр поверх
+	# move_and_slide давало вертикальный джиттер/подброс («тряска смерти»). Теперь игрок тянется за
+	# тачкой ТОЛЬКО плавной пружиной по скорости (выше) + честным move_and_slide. Упёрся и отстал на
+	# barrow_max_gap — отпускаем тачку (ниже), как и раньше.
+	# АВТО-ОТПУСКАНИЕ при отставании (#2): если игрок ДАЛЬШЕ barrow_max_gap
 	# от точки за ручками — значит он упёрся (уступ/препятствие), а тачка уехала вперёд по WASD. Чтобы
 	# она не «убегала на дистанционном управлении», отпускаем её — игрок остаётся стоять, тачка свободна.
 	var final_gap := Vector3(target.x - global_position.x, 0.0,
@@ -716,7 +909,12 @@ func _drive_barrow(delta: float) -> void:
 	# Пока тачка ВЫПРЯМЛЯЕТСЯ (#2), грабпойнт сильно гуляет (доворот на 90°) — НЕ отпускаем её по
 	# разрыву поводка, иначе плавное вставание на колёса срывалось бы на полпути.
 	if final_gap > barrow_max_gap and not _barrow.is_righting():
+		# Тачку «вырвало» из рук (игрок отстал) — споткнулись ВПЕРЁД, к ушедшей тачке (#barrow-stumble).
+		# Сила растёт с грузом (тяжёлая тачка дёргает сильнее). Груз берём ДО _stop_barrow.
+		var over_str := 0.6 + _barrow.load_factor()
+		var stumble_dir := Vector3(target.x - global_position.x, 0.0, target.z - global_position.z)
 		_stop_barrow()
+		_stumble(stumble_dir, over_str)
 
 
 # Есть ли впереди ОБРЫВ под носом тачки. Щуп ставим ВПЕРЕДИ носа: от ЦЕНТРА тачки идём по
@@ -769,12 +967,25 @@ func _drop_carried() -> void:
 		forward = -global_transform.basis.z
 	forward = forward.normalized()
 	var drop_pos := _world_aim_point()
-	_carried.drop(get_tree().current_scene, drop_pos, forward)
-	_carried = null
-	_carry_speed_mult = 1.0
-	_carry_jump_mult = 1.0
-	_axe_stowed = false
-	axe.visible = true
+	# Кладём на землю ВЕРХНЕЕ бревно стопки; остальные продолжаем нести (#carry-multi).
+	var top := _carried_logs.pop_back() as FallingLog
+	_carry_total = maxf(0.0, _carry_total - top.get_weight())
+	top.drop(get_tree().current_scene, drop_pos, forward)
+	_after_carry_removed()
+
+
+# Общий хвост после снятия одного бревна со стопки (брошено/погружено): если что-то ещё несём —
+# пересчитываем замедление/топор, иначе сбрасываем переноску в «налегке».
+func _after_carry_removed() -> void:
+	if _carried_logs.is_empty():
+		_carry_total = 0.0
+		_carry_speed_mult = 1.0
+		_carry_jump_mult = 1.0
+		_axe_stowed = false
+		axe.visible = true
+	else:
+		_reposition_carried()  # пересобрать оставшиеся (#carry-multi): снова центр/ряд/треугольник
+		_refresh_carry_visuals()
 
 
 # Точка спавна бревна по прицелу (#4, #H3): луч из камеры ищет твёрдую поверхность (слои 1|4|16:
@@ -787,7 +998,10 @@ func _world_aim_point() -> Vector3:
 	var dir := -camera.global_transform.basis.z
 	var space := get_world_3d().direct_space_state
 	var q := PhysicsRayQueryParameters3D.create(origin, origin + dir * 4.0)
-	q.exclude = [get_rid(), _carried.get_rid()]
+	var ex: Array[RID] = [get_rid()]
+	for cl in _carried_logs:
+		ex.append(cl.get_rid())
+	q.exclude = ex
 	q.collision_mask = 1 | 4 | 16
 	var hit := space.intersect_ray(q)
 	if not hit.is_empty():
@@ -810,12 +1024,17 @@ func _carry_jump_for(weight: float) -> float:
 
 # Поза бревна на плече относительно камеры: лежит вдоль взгляда, смещено на нужное плечо,
 # чуть ниже глаз. Левое плечо — топор в правой руке; правое — топор убран.
-func _shoulder_pose(on_left: bool) -> Transform3D:
-	var side := -0.32 if on_left else 0.32
-	# Поворот вокруг X кладёт длинную ось бревна (локальный Y) почти вдоль взгляда (за спину),
-	# с лёгким наклоном — будто закинуто на плечо.
-	var basis := Basis(Vector3(1.0, 0.0, 0.0), deg_to_rad(95.0))
-	return Transform3D(basis, Vector3(side, -0.05, -0.15))
+# Поза несомого бревна В ЛОКАЛЕ ТЕЛА (а не камеры, #carry-level): тело только рыщет, не наклоняется,
+# поэтому бревно лежит ГОРИЗОНТАЛЬНО (параллельно земле) при любом взгляде вверх/вниз и не «въезжает»
+# в камеру. Лежит вдоль тела, заброшено за плечо назад. offset (м) — смещение в СЕЧЕНИИ связки
+# (вбок X / вверх Y тела) для раскладки нескольких брёвен. center_y — Y центра меша в локале бревна.
+func _shoulder_pose(on_left: bool, offset: Vector2, center_y: float) -> Transform3D:
+	var side := -carry_side if on_left else carry_side
+	var basis := Basis(Vector3(1.0, 0.0, 0.0), deg_to_rad(90.0))  # ось бревна (Y) → назад тела, горизонт
+	# Точка, где должен оказаться ЦЕНТР бревна: у плеча, сбоку (X тела) и вверх (Y тела) по offset.
+	var anchor := Vector3(side, carry_height, carry_back) + Vector3(offset.x, offset.y, 0.0)
+	# origin тела бревна — у нижнего торца; сдвигаем так, чтобы ЦЕНТР меша (center_y) попал в anchor.
+	return Transform3D(basis, anchor - basis * Vector3(0.0, center_y, 0.0))
 
 
 # ТОНКИЙ примитив наземной локомоции: гравитация, WASD, бег/прыжок, move_and_slide, степ-ап,
@@ -830,6 +1049,29 @@ func _shoulder_pose(on_left: bool) -> Transform3D:
 func walk_locomotion(delta: float, speed_mult: float, can_run: bool,
 		can_jump: bool, jump_mult: float) -> void:
 	var on_floor := is_on_floor()
+
+	# СПОТЫКАНИЕ (#barrow-stumble): тачку только что «вырвало» из рук. Пока идёт окно, ВВОД НЕ перебивает
+	# горизонтальную скорость — игрока несёт по инерции вперёд, и она ПЛАВНО гаснет (stumble_friction),
+	# а не обнуляется за кадр жёстким move_toward обычной ходьбы. Так чувствуется рывок/потеря равновесия.
+	if _stumble_timer > 0.0:
+		_stumble_timer -= delta
+		if not on_floor:
+			velocity += get_gravity() * delta
+		var hv := Vector3(velocity.x, 0.0, velocity.z)
+		# НЕ даём сорваться ЗА ТАЧКОЙ В ПРОПАСТЬ (#barrow-inertia): если по ходу инерции впереди НЕТ
+		# земли (обрыв), резко гасим горизонт — игрок «ловит равновесие» у края, но инерция уже пронесла
+		# его чуть вперёд. На ровной земле инерция плавно затухает (stumble_friction) — ощущение «несёт».
+		if on_floor and hv.length() > 0.1 and not _ground_ahead(hv.normalized(), 0.5):
+			velocity.x = 0.0
+			velocity.z = 0.0
+		else:
+			var fr := clampf(stumble_friction * delta, 0.0, 1.0)
+			velocity.x = lerpf(velocity.x, 0.0, fr)
+			velocity.z = lerpf(velocity.z, 0.0, fr)
+		_pre_move_pos = global_position
+		_wish_speed = 0.0
+		move_and_slide()
+		return
 
 	# Гравитация в воздухе (значение из настроек проекта).
 	if not on_floor:

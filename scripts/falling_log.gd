@@ -178,6 +178,17 @@ func get_radius() -> float:
 	return _radius
 
 
+## Y геометрического ЦЕНТРА видимого меша в локале тела (м). У ровного бревна это length/2, но у
+## СЛОМАННОГО торца меш выступает за номинал на ~tip_cone·1.3 (конус/щепки) — у короткого куска это
+## заметная доля, и положенное «по length/2» бревно выглядело сдвинутым (#carry-center). Считаем центр
+## по фактическим габаритам меша, чтобы на плече бревно лежало серединой.
+func body_center_y() -> float:
+	var over := (_gen.tip_cone * 1.3) if _gen != null else 0.0
+	var over_b := over if _break_bottom else 0.0
+	var over_t := over if _break_top else 0.0
+	return _length * 0.5 + (over_t - over_b) * 0.5
+
+
 # Удар по ЛЕЖАЧЕМУ бревну: растим зарубку в точке попадания (тот же путь, что у ствола).
 # Добитая точка — место будущего РАСКОЛА на полено (пока только сообщение).
 func chop(chopper_position: Vector3, hit_point: Vector3 = Vector3.INF,
@@ -649,6 +660,21 @@ func drag_pull(target_world: Vector3, stiffness: float, damping: float,
 	# Тяга к точке у рук — только силой (телепорт таскал бы бревно сквозь препятствия мимо решателя).
 	var v := linear_velocity + angular_velocity.cross(grab - com)
 	var to_t := target_world - grab
+	# СХВАЧЕННЫЙ ТОРЕЦ УПЁРСЯ по направлению тяги (#drag-stuck): луч от торца вдоль to_t во что-то
+	# твёрдое (мир/бревно/пень; себя и игрока маска не видит) — НЕ тянем. Иначе рычаг (сила в 1/3 к
+	# торцу) раскручивал дальний конец вокруг застрявшего ближнего и бревно «продавливалось» сквозь
+	# препятствие на другую сторону (руки будто сквозные). Гасим скорость — бревно стоит. Освободить:
+	# повернуться/отойти, тогда to_t сменит направление и проба очистится.
+	if to_t.length() > 0.05:
+		var space := get_world_3d().direct_space_state
+		var q := PhysicsRayQueryParameters3D.create(grab, grab + to_t.normalized() * 0.3)
+		q.exclude = [get_rid()]
+		q.collision_mask = 1 | 4 | 16
+		if not space.intersect_ray(q).is_empty():
+			linear_velocity = linear_velocity.lerp(Vector3.ZERO, 0.5)
+			angular_velocity = angular_velocity.lerp(Vector3.ZERO, 0.5)
+			_drag_ground_clamp()
+			return
 	var force := (to_t * stiffness - v * damping) * mass
 	if force.length() > max_force:
 		force = force.normalized() * max_force
