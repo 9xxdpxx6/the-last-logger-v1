@@ -1,8 +1,8 @@
 [gd_scene format=3 uid="uid://dl8dwxcasnt8j"]
 
-[ext_resource type="PackedScene" path="res://scenes/player.tscn" id="1_player"]
+[ext_resource type="PackedScene" uid="uid://db67c3dd8vty1" path="res://scenes/player.tscn" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/tree.tscn" id="2_tree"]
-[ext_resource type="PackedScene" path="res://scenes/wheelbarrow.tscn" id="3_barrow"]
+[ext_resource type="PackedScene" uid="uid://cgxi57diqwf4g" path="res://scenes/wheelbarrow.tscn" id="3_barrow"]
 
 [sub_resource type="ProceduralSkyMaterial" id="SkyMaterial"]
 
@@ -79,6 +79,30 @@ height = 24.0
 
 [sub_resource type="SphereShape3D" id="HillShape"]
 radius = 12.0
+
+[sub_resource type="StandardMaterial3D" id="TestMat"]
+albedo_color = Color(0.55, 0.4, 0.35, 1)
+
+[sub_resource type="BoxMesh" id="RamWallMesh"]
+material = SubResource("TestMat")
+size = Vector3(5, 1.8, 0.5)
+
+[sub_resource type="BoxShape3D" id="RamWallShape"]
+size = Vector3(5, 1.8, 0.5)
+
+[sub_resource type="BoxMesh" id="MesaMesh"]
+material = SubResource("TestMat")
+size = Vector3(8, 1, 8)
+
+[sub_resource type="BoxShape3D" id="MesaShape"]
+size = Vector3(8, 1, 8)
+
+[sub_resource type="BoxMesh" id="RampMesh"]
+material = SubResource("TestMat")
+size = Vector3(7, 0.4, 6)
+
+[sub_resource type="BoxShape3D" id="RampShape"]
+size = Vector3(7, 0.4, 6)
 
 [node name="World" type="Node3D" unique_id=1194633807]
 
@@ -184,68 +208,97 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5, 0, -22)
 [node name="TreeF5" parent="Forest" unique_id=1633341302 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 0, -22)
 
-[node name="TreeF6" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF6" parent="Forest" unique_id=1252042841 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -9, 0, -13)
 
-[node name="TreeF7" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF7" parent="Forest" unique_id=1469575653 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 9, 0, -14)
 
-[node name="TreeF8" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF8" parent="Forest" unique_id=1997791855 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -12, 0, -18)
 
-[node name="TreeF9" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF9" parent="Forest" unique_id=1437734070 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 13, 0, -19)
 
-[node name="TreeF10" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF10" parent="Forest" unique_id=1322913045 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0, -26)
 
-[node name="TreeF11" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF11" parent="Forest" unique_id=226872416 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4, 0, -27)
 
-[node name="TreeF12" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF12" parent="Forest" unique_id=1514221710 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -8, 0, -28)
 
-[node name="TreeF13" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF13" parent="Forest" unique_id=1378775452 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8, 0, -29)
 
-[node name="TreeF14" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF14" parent="Forest" unique_id=1580981436 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -18, 0, -22)
 
-[node name="TreeF15" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF15" parent="Forest" unique_id=1124124698 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, -21)
 
-[node name="TreeF16" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF16" parent="Forest" unique_id=522764200 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -20, 0, -13)
 
-[node name="TreeF17" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF17" parent="Forest" unique_id=270576609 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 20, 0, -15)
 
-[node name="TreeF18" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF18" parent="Forest" unique_id=68682310 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 0, -11)
 
-[node name="TreeF19" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF19" parent="Forest" unique_id=594598863 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 11, 0, -24)
 
-[node name="TreeF20" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF20" parent="Forest" unique_id=673547383 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -11, 0, -25)
 
-[node name="TreeF21" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF21" parent="Forest" unique_id=146330416 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -31)
 
-[node name="TreeF22" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF22" parent="Forest" unique_id=1467496836 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -16, 0, -29)
 
-[node name="TreeF23" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF23" parent="Forest" unique_id=1172159179 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 16, 0, -28)
 
-[node name="TreeF24" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF24" parent="Forest" unique_id=923823499 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 24, 0, -22)
 
-[node name="TreeF25" parent="Forest" instance=ExtResource("2_tree")]
+[node name="TreeF25" parent="Forest" unique_id=1403288383 instance=ExtResource("2_tree")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -24, 0, -20)
+
+[node name="TestPad" type="Node3D" parent="."]
+
+[node name="RamWall" type="StaticBody3D" parent="TestPad"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8, 0.9, 7)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="TestPad/RamWall"]
+mesh = SubResource("RamWallMesh")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="TestPad/RamWall"]
+shape = SubResource("RamWallShape")
+
+[node name="Mesa" type="StaticBody3D" parent="TestPad"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0.5, 12)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="TestPad/Mesa"]
+mesh = SubResource("MesaMesh")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="TestPad/Mesa"]
+shape = SubResource("MesaShape")
+
+[node name="Ramp" type="StaticBody3D" parent="TestPad"]
+transform = Transform3D(0.97815, 0.20791, 0, -0.20791, 0.97815, 0, 0, 0, 1, 11, 0.07, 12)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="TestPad/Ramp"]
+mesh = SubResource("RampMesh")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="TestPad/Ramp"]
+shape = SubResource("RampShape")
 
 [node name="Player" parent="." unique_id=1690603706 instance=ExtResource("1_player")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, 0)
 
-[node name="Wheelbarrow" parent="." instance=ExtResource("3_barrow")]
+[node name="Wheelbarrow" parent="." unique_id=1529703809 instance=ExtResource("3_barrow")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 0, -1)
