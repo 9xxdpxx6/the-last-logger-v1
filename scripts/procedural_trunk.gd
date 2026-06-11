@@ -56,14 +56,19 @@ func build(carves: Array) -> ArrayMesh:
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
 	var cols := SEGMENTS
-	var rows := RINGS + 1
+	# Высоты колец: равномерная база ПЛЮС локальное СГУЩЕНИЕ у каждой зарубки (#notch-V). Без него
+	# вырез (по высоте ~0.2 м) попадал между кольцами базовой сетки (~0.28 м) и читался как мягкая
+	# вмятина; с частыми кольцами у выреза прорисовывается КЛИН (V-зарубка, как от топора).
+	var ys := _ring_heights(carves)
+	var rows := ys.size()
+	var last := rows - 1
 
 	# Вершины боковой поверхности. Бревно может иметь слом на ОБОИХ торцах одновременно
 	# (например, после раскола середины — у половинок старый рваный конец И свежий рез).
 	# Поэтому форму слома считаем для каждого торца НЕЗАВИСИМО, а не одним break_dir.
 	for r in rows:
-		var t := float(r) / float(RINGS)
-		var y := -height * 0.5 + t * height
+		var y: float = ys[r]
+		var t := clampf((y + height * 0.5) / height, 0.0, 1.0)
 		var base_r := lerpf(bottom_radius, top_radius, t)
 		for c in cols:
 			var ang := TAU * float(c) / float(cols)
@@ -83,7 +88,7 @@ func build(carves: Array) -> ArrayMesh:
 				if d_end >= break_span:
 					continue
 				var f := 1.0 - d_end / break_span
-				var is_end_ring := (r == RINGS) if end_top else (r == 0)
+				var is_end_ring := (r == last) if end_top else (r == 0)
 				# Конус «в кол»: к торцу сужаем радиус и тянем вершины к острию.
 				rad -= f * f * tip_cone * 0.7
 				vy += bdir * f * tip_cone
@@ -118,8 +123,8 @@ func build(carves: Array) -> ArrayMesh:
 	st.set_uv(Vector2(0.5, 1.0))
 	st.add_vertex(Vector3(0.0, ty, 0.0))
 
-	# Треугольники боковой поверхности.
-	for r in RINGS:
+	# Треугольники боковой поверхности (между соседними кольцами; их число теперь динамическое).
+	for r in last:
 		for c in cols:
 			var c2 := (c + 1) % cols
 			var i0 := r * cols + c
@@ -141,8 +146,8 @@ func build(carves: Array) -> ArrayMesh:
 		st.add_index(c2)
 		st.add_index(c)
 		st.add_index(ct)
-		st.add_index(RINGS * cols + c)
-		st.add_index(RINGS * cols + c2)
+		st.add_index(last * cols + c)
+		st.add_index(last * cols + c2)
 
 	st.generate_normals()
 	if material:
@@ -170,10 +175,36 @@ func _reduction(carves: Array, y: float, ang: float) -> float:
 		var w := -dh * blade.y + dy * blade.x
 		if absf(u) >= notch_long or absf(w) >= notch_thick:
 			continue
-		var uf := 1.0 - absf(u) / notch_long
-		var wf := 1.0 - absf(w) / notch_thick
+		# Форма выреза (#notch-V): ВДОЛЬ лезвия (u) — плоское «дно» с резкими краями (чистый
+		# горизонтальный зарез шириной 2·notch_long), ПОПЕРЁК (w) — острая буква V в глубину. Две
+		# плоские грани сходятся в ребро на w=0 → клин-зарубка, как от топора, а не круглая вмятина.
+		var edge := maxf(notch_long * 0.25, 0.03)              # узкий скос на концах зареза
+		var uf := clampf((notch_long - absf(u)) / edge, 0.0, 1.0)
+		var wf := 1.0 - absf(w) / notch_thick                  # линейный спад = острый V
 		red = maxf(red, depth * uf * wf)
 	return red
+
+
+# Высоты колец боковой сетки: равномерная база + СГУЩЕНИЕ полосой вокруг каждой зарубки (#notch-V),
+# чтобы клиновой вырез имел частые рёбра и читался формой, а не «вмятиной» между редкими кольцами.
+func _ring_heights(carves: Array) -> Array:
+	var ys: Array = []
+	for r in RINGS + 1:
+		ys.append(-height * 0.5 + float(r) / float(RINGS) * height)
+	for carve in carves:
+		var cy: float = (carve["pos"] as Vector3).y
+		var span := notch_thick * 1.4
+		var n := 10
+		for i in range(n + 1):
+			ys.append(cy - span + 2.0 * span * float(i) / float(n))
+	ys.sort()
+	# Убираем слишком близкие (и зажимаем в высоту ствола), чтобы не плодить вырожденные кольца.
+	var out: Array = []
+	for y in ys:
+		var yc := clampf(y, -height * 0.5, height * 0.5)
+		if out.is_empty() or absf(yc - float(out[-1])) > 0.004:
+			out.append(yc)
+	return out
 
 
 ## Направление лезвия НА ПОВЕРХНОСТИ ствола (2D): x — вдоль окружности (азимут), y — вверх.
