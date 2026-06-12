@@ -207,6 +207,29 @@ func _ring_heights(carves: Array) -> Array:
 	return out
 
 
+## Переносит зарубки на отколовшийся кусок при сломе/расколе (#notch-keep). carves — зарубки
+## ИСХОДНОГО тела {pos (centered, Y∈[−src_len/2..]), depth, blade}; кусок занимает по высоте от
+## lo_h до hi_h (м от нижнего торца исходного), его длина new_len. Берём зарубки, попавшие в этот
+## диапазон, и пересчитываем их Y в ЦЕНТРИРОВАННУЮ систему нового куска. Зарубки у самого реза
+## (в полосе margin) отбрасываем — там образуется рваный слом, и переносить их некуда. x/z (значит,
+## угол вокруг ствола) сохраняем как есть. Если кусков-зарубок больше max_keep — отбрасываем самые
+## старые (FIFO), чтобы меш не тяжелел бесконечно при многократном расколе.
+static func slice_carves(carves: Array, src_len: float, lo_h: float, hi_h: float,
+		new_len: float, margin: float = 0.12, max_keep: int = 50) -> Array:
+	var out: Array = []
+	for c in carves:
+		var p: Vector3 = c["pos"]
+		var h := p.y + src_len * 0.5            # высота зарубки от нижнего торца исходного (м)
+		if h <= lo_h + margin or h >= hi_h - margin:
+			continue
+		var np := Vector3(p.x, (h - lo_h) - new_len * 0.5, p.z)
+		out.append({"pos": np, "depth": c["depth"], "blade": c.get("blade", Vector2(1.0, 0.0))})
+	# FIFO: при переполнении режем с начала (самые ранние зарубки).
+	if out.size() > max_keep:
+		out = out.slice(out.size() - max_keep)
+	return out
+
+
 ## Направление лезвия НА ПОВЕРХНОСТИ ствола (2D): x — вдоль окружности (азимут), y — вверх.
 ## local_point — точка удара в локале меша, local_edge — направление кромки топора в том же
 ## локале. Проецируем кромку на касательную плоскость цилиндра в точке удара.

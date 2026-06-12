@@ -19,12 +19,13 @@ signal chopped_through(fall_direction: Vector3)
 ## пределах копятся в один разруб независимо от стороны (рубка по кругу = один руб).
 @export var chop_merge_radius: float = 0.2
 ## Максимальная глубина вдавливания зарубки (м) у добитой точки. Радиус ствола ~0.14–0.3 м,
-## поэтому почти добитая зарубка прорезает его на бо́льшую часть толщины (#notch-V).
-@export var notch_max_depth: float = 0.12
+## поэтому почти добитая зарубка прорезает его глубоко внутрь — острый клин, а не вмятина (#notch-V).
+@export var notch_max_depth: float = 0.19
 ## Полудлина прорези ВДОЛЬ лезвия топора (м) — ширина горизонтального зареза клина.
-@export var notch_blade_reach: float = 0.18
+@export var notch_blade_reach: float = 0.16
 ## Полуширина прорези ПОПЕРЁК лезвия (м) — вертикальный размах V-клина (вверх+вниз от ребра).
-@export var notch_thickness: float = 0.13
+## Узкий → клин входит остро и неглубоко по высоте, а вглубь ствола режет (notch_max_depth).
+@export var notch_thickness: float = 0.075
 
 @export_group("Падение бревна")
 ## Начальный толчок (рад/с), задающий сторону падения. Дальше валит гравитация.
@@ -80,6 +81,9 @@ signal chopped_through(fall_direction: Vector3)
 
 ## Накопитель точек рубки (кластеры ударов) текущей стоячей части.
 var _sites: ChopSites
+## Зарубки, УНАСЛЕДОВАННЫЕ пнём при предыдущем сломе (#notch-keep): замороженные, ниже линии
+## слома — рисуются вместе со свежими, но не растут и не валят. Пересчитаны в локаль пня.
+var _inherited_carves: Array = []
 ## Генератор процедурного меша текущей стоячей части (ствол → пень → ниже).
 var _trunk: ProceduralTrunk
 ## Горизонтальное направление от ствола к рубящему — "сторона рубки".
@@ -171,14 +175,20 @@ func _apply_random_shape() -> void:
 # Пересобирает меш текущей стоячей части под её точки рубки: каждая даёт вдавленную ямку
 # глубиной по своему прогрессу (+ форма слома, если это уже пень). Зовём только на удар.
 func _rebuild_trunk() -> void:
-	var carves: Array = []
+	mesh.mesh = _trunk.build(_current_carves())
+
+
+# Полный список зарубок стоячей части: УНАСЛЕДОВАННЫЕ (со слома, замороженные) + СВЕЖИЕ (растущие
+# точки рубки). Генератор рисует все; добитие/слом считают только свежие (_sites).
+func _current_carves() -> Array:
+	var carves: Array = _inherited_carves.duplicate()
 	for site in _sites.sites:
 		carves.append({
 			"pos": site.local_pos,
 			"depth": _sites.depth_fraction(site) * notch_max_depth,
 			"blade": site.blade,
 		})
-	mesh.mesh = _trunk.build(carves)
+	return carves
 
 
 # Удар по стоячей части (стволу ИЛИ пню — путь один). Растим зарубку в точке попадания;
@@ -243,6 +253,10 @@ func _fell(cut_local_y: float, ring_factor: float = 0.0, chop_angle: float = 0.0
 	# назначим новой стоячей части (укоротившемуся пню) свежий слом сверху.
 	var piece_top_break := _top_is_break
 
+	# Все зарубки текущей стоячей части ДО слома — разнесём по пню (ниже реза) и бревну (выше),
+	# чтобы они не исчезали при «смене» ствола (#notch-keep). Зарубку у самого реза слом поглощает.
+	var carves := _current_carves()
+
 	# 1) СНАЧАЛА разбираемся со стоячей частью (укорачиваем пень / убираем коллизию), чтобы
 	#    у падающего бревна не было пересечения с коллизией стоячей части (иначе их
 	#    «расталкивает», бревно дёргается и встаёт обратно вертикально).
@@ -258,7 +272,9 @@ func _fell(cut_local_y: float, ring_factor: float = 0.0, chop_angle: float = 0.0
 		gen.top_radius = r_cut
 		gen.material = mat
 		_shape_break(gen, true, ring_factor, chop_angle)
-		mesh.mesh = gen.build([])
+		# Пень наследует зарубки НИЖЕ линии слома (пересчитанные в его новую локаль).
+		var keep_stump := ProceduralTrunk.slice_carves(carves, total, 0.0, cut_h, cut_h)
+		mesh.mesh = gen.build(keep_stump)
 		mesh.position.y = cut_h * 0.5
 		var sh := CylinderShape3D.new()
 		sh.height = cut_h
@@ -268,13 +284,15 @@ func _fell(cut_local_y: float, ring_factor: float = 0.0, chop_angle: float = 0.0
 		# Пень — это снова «стоячая часть»: тот же генератор, новый накопитель ударов.
 		_trunk = gen
 		_sites = ChopSites.new(chop_merge_radius, chops_to_fell)
+		_inherited_carves = keep_stump
 		# Верх укоротившегося пня — теперь свежий слом: при следующем сломе бревно унаследует его.
 		_top_is_break = true
 
 	# 2) Падающая часть: достаточно длинная — свободное бревно; короткий обломок исчезает.
 	if piece_len >= MIN_FALL_PIECE:
+		var keep_fall := ProceduralTrunk.slice_carves(carves, total, cut_h, total, piece_len)
 		_spawn_falling_log(cut_h, piece_len, r_cut, top_r, mat,
-				ring_factor, chop_angle, piece_top_break)
+				ring_factor, chop_angle, piece_top_break, keep_fall)
 
 	var fall_dir := -last_chop_direction
 	if fall_dir.length() < 0.01:
@@ -339,7 +357,7 @@ func _log_cfg(mat: Material) -> Dictionary:
 # над основанием ВДОЛЬ ствола (локальный Y); слом (рваный торец) у низа бревна.
 func _spawn_falling_log(cut_h: float, length: float, bottom_r: float,
 		top_r: float, mat: Material, ring_factor: float, chop_angle: float,
-		top_break: bool = false) -> void:
+		top_break: bool = false, inherited: Array = []) -> void:
 	var cfg := _log_cfg(mat)
 	# Реальная мировая точка и ОРИЕНТАЦИЯ слома: у наклонного дерева ствол повёрнут, поэтому берём
 	# их из самого узла. У прямого дерева basis = единичный, origin = (x, y+cut_h, z) — поведение
@@ -348,8 +366,9 @@ func _spawn_falling_log(cut_h: float, length: float, bottom_r: float,
 	var origin := to_global(Vector3(0.0, cut_h, 0.0))
 	var xf := Transform3D(basis, origin)
 	# Слом (рваный торец) — снизу падающего бревна. Верх рваный, если рубили пень (top_break).
+	# Бревно наследует зарубки ВЫШЕ линии слома (пересчитанные в его локаль).
 	var body := FallingLog.spawn(get_tree().current_scene, cfg, xf, length,
-			bottom_r, top_r, ring_factor, chop_angle, true, top_break)
+			bottom_r, top_r, ring_factor, chop_angle, true, top_break, inherited)
 
 	# Направление падения: у НАКЛОННОГО дерева — в сторону наклона (куда выросло криво), у прямого —
 	# ПРОТИВОПОЛОЖНУЮ стороне рубки (от рубящего, как раньше).

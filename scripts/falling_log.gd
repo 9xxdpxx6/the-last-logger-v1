@@ -72,6 +72,10 @@ var _gen: ProceduralTrunk
 var _sites: ChopSites
 var _mesh: MeshInstance3D
 var _notch_max_depth: float = 0.3
+# Зарубки, УНАСЛЕДОВАННЫЕ от исходного тела при сломе/расколе (#notch-keep): уже «замороженные»
+# (своя глубина/угол), больше не растут и не валят — просто рисуются вместе со свежими. Пересчитаны
+# в локаль ЭТОГО куска фабрикой spawn (через ProceduralTrunk.slice_carves).
+var _inherited_carves: Array = []
 var _chips_scene: PackedScene
 
 # Балансовые данные бревна (плотность/вес/замедление) и полный конфиг для пересоздания
@@ -213,14 +217,20 @@ func chop(chopper_position: Vector3, hit_point: Vector3 = Vector3.INF,
 
 
 func _rebuild() -> void:
-	var carves: Array = []
+	_mesh.mesh = _gen.build(_all_carves())
+
+
+# Полный список зарубок этого куска: УНАСЛЕДОВАННЫЕ (замороженные, со слома/раскола) + СВЕЖИЕ
+# (растущие точки рубки). Их рисует генератор; добитие считают только свежие (_sites).
+func _all_carves() -> Array:
+	var carves: Array = _inherited_carves.duplicate()
 	for s in _sites.sites:
 		carves.append({
 			"pos": s.local_pos,
 			"depth": _sites.depth_fraction(s) * _notch_max_depth,
 			"blade": s.blade,
 		})
-	_mesh.mesh = _gen.build(carves)
+	return carves
 
 
 func _spawn_chips(point: Vector3, surface_normal: Vector3) -> void:
@@ -263,7 +273,8 @@ static func chip_spray_dir(surface_normal: Vector3) -> Vector3:
 static func spawn(parent: Node, cfg: Dictionary, world_xf: Transform3D,
 		length: float, bottom_r: float, top_r: float,
 		ring_factor: float, chop_angle: float,
-		break_bottom: bool, break_top: bool) -> FallingLog:
+		break_bottom: bool, break_top: bool,
+		inherited: Array = []) -> FallingLog:
 	var gen := ProceduralTrunk.new()
 	gen.height = length
 	gen.bottom_radius = bottom_r
@@ -293,7 +304,8 @@ static func spawn(parent: Node, cfg: Dictionary, world_xf: Transform3D,
 	body.physics_material_override = pm
 
 	var mi := MeshInstance3D.new()
-	mi.mesh = gen.build([])
+	# Свежесозданный кусок уже несёт УНАСЛЕДОВАННЫЕ зарубки (со слома/раскола) — рисуем их сразу.
+	mi.mesh = gen.build(inherited)
 	mi.position.y = length * 0.5
 	body.add_child(mi)
 
@@ -323,6 +335,8 @@ static func spawn(parent: Node, cfg: Dictionary, world_xf: Transform3D,
 	# Запоминаем, какие торцы — рваный слом: при будущем расколе их нельзя «сгладить».
 	body._break_bottom = break_bottom
 	body._break_top = break_top
+	# Унаследованные зарубки — чтобы при следующем расколе/рубке они остались на куске.
+	body._inherited_carves = inherited
 
 	# Тюнинг падения/лежания — из конфига (одно место правки на все куски).
 	body.initial_tip_speed = cfg.get("initial_tip_speed", 0.5)
@@ -368,12 +382,17 @@ func _split(site) -> void:
 	var xf := global_transform
 	var axis_y := xf.basis.y.normalized()
 
+	# Все текущие зарубки бревна (унаследованные + свежие) — разнесём по половинам, чтобы они
+	# не «затёрлись в гладь» при расколе (#notch-keep). Зарубку у самого реза слом поглощает.
+	var carves := _all_carves()
+
 	# Нижняя половина: от торца тела до реза. Низ — ИСХОДНЫЙ торец (сохраняем его рваность,
 	# если он был сломом), верх — СВЕЖИЙ рез по центру (всегда рваный).
 	var len_a := cut_y
 	if len_a >= min_len:
+		var keep_a := ProceduralTrunk.slice_carves(carves, total, 0.0, cut_y, len_a)
 		var pa := FallingLog.spawn(parent, _spawn_cfg, xf, len_a, br, r_cut,
-				ring, ang, _break_bottom, true)
+				ring, ang, _break_bottom, true, keep_a)
 		pa.place_resting()
 
 	# Верхняя половина: от реза до верха. Origin сдвигаем на cut_y вдоль оси (+ зазор,
@@ -383,8 +402,9 @@ func _split(site) -> void:
 	if len_b >= min_len:
 		var xf_b := xf
 		xf_b.origin = xf * Vector3(0.0, cut_y, 0.0) + axis_y * 0.03
+		var keep_b := ProceduralTrunk.slice_carves(carves, total, cut_y, total, len_b)
 		var pb := FallingLog.spawn(parent, _spawn_cfg, xf_b, len_b, r_cut, tr,
-				ring, ang, true, _break_top)
+				ring, ang, true, _break_top, keep_b)
 		pb.place_resting()
 
 	queue_free()
