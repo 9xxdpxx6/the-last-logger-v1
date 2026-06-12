@@ -96,6 +96,11 @@ class_name Player
 ## Множитель скорости, когда игрок ТОЛКАЕТ бревно перед собой (идёт на него). Толкать почти
 ## нельзя — тащат назад/вбок. 0.04 = в 25 раз медленнее, чем тащить.
 @export var drag_push_speed_mult: float = 0.04
+## Глубина проверки опоры (м) под игроком при ВЗЯТИИ бревна на ВОЛОК (#reach). Волок ставит игрока
+## у схваченного торца — если там под ногами нет твёрдой земли в пределах этой глубины (бревно
+## свисает одним концом с обрыва), волок не начинаем: иначе игрок «брал» свисающий конец, стоя на
+## краю в воздухе, и тащил бревно вниз. Луч прицела бьёт дальше опоры, поэтому проверка нужна.
+@export var drag_ground_drop: float = 1.2
 ## На сколько метров ПЕРЕД игроком «рука» держит схваченный торец бревна.
 @export var drag_grab_distance: float = 0.8
 ## Высота (м), на которую «рука» поднимает схваченный торец над землёй — вид «в руке».
@@ -588,8 +593,35 @@ func _aim_target() -> Dictionary:
 			# мелкие полешки можно выдёргивать снизу. Тяжёлое (только волоком) — по-прежнему лишь сверху.
 			if fl.is_covered() and fl.get_weight() > carry_capacity:
 				continue
+			# ВОЛОК (тяжёлое бревно) ставит игрока у схваченного торца — если там нет опоры (бревно
+			# свисает концом с обрыва), не предлагаем взять: иначе игрок «брал» висящий конец с края и
+			# тащил вниз (#reach). Лёгкое (в руки на плечо) игрока не двигает — его не проверяем.
+			if fl.get_weight() > carry_capacity and not _drag_lands_on_ground(fl):
+				continue
 			return {"type": "log", "log": fl}
 	return {}
+
+
+# Будет ли игрок на ТВЁРДОЙ земле, если возьмёт это бревно на волок (#reach). Волок ставит игрока у
+# БЛИЖНЕГО торца, отступив на длину рук вдоль бревна (та же поза, что в _start_drag) — там и щупаем
+# опору лучом вниз. Нет земли в пределах drag_ground_drop под этой точкой → бревно свисает над
+# обрывом, волок начинать нельзя.
+func _drag_lands_on_ground(fl: FallingLog) -> bool:
+	var a := fl.global_position                                   # один торец (локальный 0)
+	var b := fl.to_global(Vector3(0.0, fl.get_length(), 0.0))     # другой торец
+	var near := a if global_position.distance_to(a) <= global_position.distance_to(b) else b
+	var far := b if near == a else a
+	var dir := far - near
+	dir.y = 0.0
+	if dir.length() > 0.01:
+		dir = dir.normalized()
+	var stand := Vector3(near.x - dir.x * drag_grab_distance, global_position.y,
+			near.z - dir.z * drag_grab_distance)
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(stand + Vector3.UP * 0.3,
+			stand - Vector3.UP * drag_ground_drop, 1 | 4 | 16)
+	q.exclude = [get_rid(), fl.get_rid()]
+	return not space.intersect_ray(q).is_empty()
 
 
 # Тачка под прицелом ДЛЯ ЗАГРУЗКИ (когда несём бревно). Годится либо сама тачка (попали по раме/
@@ -1092,7 +1124,9 @@ func walk_locomotion(delta: float, speed_mult: float, can_run: bool,
 		else:
 			velocity.x = move_toward(velocity.x, 0.0, speed)
 			velocity.z = move_toward(velocity.z, 0.0, speed)
-		if can_jump and Input.is_action_just_pressed("jump"):
+		# is_action_PRESSED (а не just_pressed): пока пробел зажат, прыжок повторяется
+		# сразу в первый кадр на земле — автопрыжок без паузы между прыжками (как в Minecraft).
+		if can_jump and Input.is_action_pressed("jump"):
 			velocity.y = _jump_velocity * jump_mult
 	else:
 		# В воздухе — ограниченное руление: инерция сохраняется, но подправить можно.
