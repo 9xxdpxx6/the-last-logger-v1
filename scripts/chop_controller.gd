@@ -131,9 +131,24 @@ func _on_axe_impact() -> void:
 	var point := _chop_ray.get_collision_point(0)
 	var normal := _chop_ray.get_collision_normal(0)
 
+	var forward := -_camera.global_transform.basis.z
+
+	# Точку зарубки уточняем ТОНКИМ лучом ровно через центр экрана (прицел). «Толстый»
+	# ShapeCast (сфера r=0.15) прощает прицеливание, но его точка контакта лежит на сфере и
+	# при взгляде сверху вниз проецируется ЧУТЬ ВЫШЕ перекрестия. Тонкий луч из камеры вперёд
+	# попадает ровно в прицел; если он задел то же тело — берём его точку, иначе остаёмся на
+	# прощающей точке ShapeCast (тонкий луч мог промахнуться мимо тонкого ствола с краю).
+	var cam_o := _camera.global_position
+	var space := _camera.get_world_3d().direct_space_state
+	var rq := PhysicsRayQueryParameters3D.create(cam_o, cam_o + forward * 3.0, _chop_ray.collision_mask)
+	rq.exclude = [_player.get_rid()]
+	var hit := space.intersect_ray(rq)
+	if not hit.is_empty() and hit.get("collider") == target:
+		point = hit["position"]
+		normal = hit["normal"]
+
 	# Сила удара = насколько он ПЕРПЕНДИКУЛЯРЕН стволу. В лоб (взгляд против нормали) —
 	# полный урон/глубокая зарубка; вскользь — слабо. perp: 0 (касательно)..1 (в лоб).
-	var forward := -_camera.global_transform.basis.z
 	var perp := clampf(forward.dot(-normal), 0.0, 1.0)
 	var power := lerpf(0.35, 1.3, perp)
 	# Сила замаха (#4): дольше держал ЛКМ → сильнее (до chop_power_max); боковой удар A/D и
