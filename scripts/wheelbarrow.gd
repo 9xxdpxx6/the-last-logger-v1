@@ -162,6 +162,12 @@ var _climbing: bool = false
 ## Брёвна, которым мы временно занизили физ-массу, пока они в кузове: log → исходная масса (кг).
 ## По нему _manage_cargo возвращает массу, когда бревно покидает кузов (см. #I).
 var _cargo: Dictionary = {}
+## Снимок контактов тачки за прошлый физшаг (#barrow-ram): нормаль (мир), точка (мир), тело. Снимаем
+## в _integrate_forces, читаем в _front_blocked. По реальным контактам (а не лучам) надёжно ловим
+## упор носом в дерево/стену при ЛЮБОЙ геометрии — тонкий ствол-цилиндр луч мог пройти между лучами.
+var _c_norm: Array[Vector3] = []
+var _c_pos: Array[Vector3] = []
+var _c_body: Array = []
 
 @onready var _grab_point: Node3D = $GrabPoint
 @onready var _cargo_anchor: Node3D = $CargoAnchor
@@ -172,6 +178,9 @@ var _cargo: Dictionary = {}
 
 func _ready() -> void:
 	add_to_group("wheelbarrow")
+	# Больше репортов контактов: с грузом + пол + дерево лимит 8 мог вытеснить фронтальный контакт,
+	# и упор носом не детектился (#barrow-ram). 16 хватает, чтобы преграда впереди всегда попадала в снимок.
+	max_contacts_reported = maxi(max_contacts_reported, 16)
 	mass = empty_mass
 	# Сразу «физичная»: центр масс ВЫШЕ оси колёс, поэтому стоящая тачка с самого старта сцены
 	# неустойчива на двух колёсах и заваливается — не нужно сперва её трогать (#2). В руках
@@ -192,7 +201,14 @@ func _process(delta: float) -> void:
 func _spin_wheel(wheel: Node3D, fwd: Vector3, delta: float) -> void:
 	if wheel == null:
 		return
-	var offset := wheel.global_position - global_position
+	# Крутим колесо ТОЛЬКО когда оно касается опоры (#wheel-spin): в воздухе — тачку приподняли, она
+	# заехала колесом на бревно/дерево, или висит — колесо крутиться не должно. Луч вниз от центра
+	# колеса на радиус+зазор: нет земли под колесом → стоит на месте (визуально не катится).
+	var space := get_world_3d().direct_space_state
+	var wc := wheel.global_position
+	if _ray(space, wc, wc - Vector3.UP * (wheel_radius + 0.08)).is_empty():
+		return
+	var offset := wc - global_position
 	var contact_v := linear_velocity + angular_velocity.cross(offset)
 	var v := contact_v.dot(fwd)
 	var da := v / maxf(wheel_radius, 0.05) * delta
@@ -218,6 +234,14 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 		state.linear_velocity = Vector3.ZERO
 		state.angular_velocity = Vector3.ZERO
 		_tp_pending = false
+	# Снимок контактов для _front_blocked (#barrow-ram): нормаль/точка в мире + тело.
+	_c_norm.clear()
+	_c_pos.clear()
+	_c_body.clear()
+	for i in state.get_contact_count():
+		_c_norm.append(state.get_contact_local_normal(i))
+		_c_pos.append(state.get_contact_local_position(i))
+		_c_body.append(state.get_contact_collider_object(i))
 
 
 func _physics_process(delta: float) -> void:
@@ -362,6 +386,42 @@ func ground_normal() -> Vector3:
 	if hit.is_empty():
 		return Vector3.UP
 	return hit.get("normal", Vector3.UP)
+
+
+## Упёрлась ли тачка носом в НЕПРОХОДИМУЮ преграду по направлению travel (#barrow-ram): стену/дерево/
+## пень — статику или замороженное тело ВЫШЕ climb_height. Подвижные брёвна пропускаем (их
+## расталкивает _shove_obstacles), проходимый склон и низкий уступ — тоже (по ним тачка едет/лезет).
+## Возвращает {normal} преграды или {}. Нужно, чтобы drive() не вкачивал ход в преграду каждый кадр —
+## иначе решатель отбивает тачку, drive снова толкает, и её «трясёт как пулемёт».
+func _front_blocked(travel: Vector3) -> Dictionary:
+	var t := Vector3(travel.x, 0.0, travel.z)
+	if t.length() < 0.01:
+		return {}
+	t = t.normalized()
+	# Груз в кузове из проверки исключаем (его контакты — внутри тачки, не упор).
+	var cargo := {}
+	for b in _cargo_area.get_overlapping_bodies():
+		cargo[b] = true
+	for i in _c_norm.size():
+		var n: Vector3 = _c_norm[i]
+		# Почти ГОРИЗОНТАЛЬНАЯ нормаль = ВЕРТИКАЛЬНАЯ преграда (стена/дерево/пень). Пол/потолок (|n.y|
+		# велик) пропускаем — это не упор по ходу.
+		if absf(n.y) > 0.6:
+			continue
+		var cp: Vector3 = _c_pos[i]
+		# НИЗКИЙ контакт (ниже climb_height) — уступ/бордюр/бок лежащего бревна: им занимается climb-assist
+		# (заехать) и _shove_obstacles (растолкать), не глушим. Глушим только то, что ВЫШЕ — настоящую стену.
+		if cp.y - global_position.y <= climb_height + 0.02:
+			continue
+		# Контакт должен быть ВПЕРЕДИ по ходу: упор гасим только когда едем В него. Контакт сбоку
+		# (скольжение вдоль стены — как об куб) или сзади (отъезд) ход не глушит.
+		var ahead := Vector3(cp.x - global_position.x, 0.0, cp.z - global_position.z)
+		if ahead.dot(t) <= 0.02:
+			continue
+		if cargo.has(_c_body[i]):
+			continue
+		return {"normal": -t}
+	return {}
 
 
 func _ray(space: PhysicsDirectSpaceState3D, from: Vector3, to: Vector3) -> Dictionary:
@@ -675,6 +735,15 @@ func drive(forward_input: float, yaw_input: float, fwd_speed: float, turn_speed:
 		var v := fwd * _drive_speed
 		linear_velocity.x = v.x
 		linear_velocity.z = v.z
+	# АНТИ-ДЁРГАНЬЕ У ПРЕГРАДЫ (#barrow-ram): нос упёрся в непроходимое (стену/дерево выше climb_height)
+	# — глушим ВЕСЬ командный ход и горизонтальную скорость от него, тачка встаёт намертво. Раньше убирали
+	# лишь составляющую В нормаль преграды; об ЦИЛИНДР (дерево) оставшаяся КАСАТЕЛЬНАЯ гнала тачку вбок по
+	# дуге вокруг ствола, и её трясло (об куб нормаль стабильна — слайд был ровным). Полный стоп убирает дугу.
+	# Поворот (yaw, A/D) НЕ трогаем: тачку можно отвернуть от дерева, и как нос уйдёт с упора — ход вернётся.
+	if absf(_drive_speed) > 0.01 and not _front_blocked(fwd * signf(_drive_speed)).is_empty():
+		_drive_speed = 0.0
+		linear_velocity.x = 0.0
+		linear_velocity.z = 0.0
 	# Поворот вокруг оси колёс с инерцией: тоже ведём КОМАНДНОЕ рысканье _drive_yaw (груз гасил бы и
 	# его). Крен/тангаж сильно гасим, чтобы тачку не валило.
 	_drive_yaw = move_toward(_drive_yaw, -yaw_input * turn_speed, turn_accel * delta)
