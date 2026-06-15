@@ -201,6 +201,39 @@ class_name Player
 ## отставании: падение в пропасть дёргает резче. Итог ещё домножается на (0.6 + доля груза).
 @export var barrow_stumble_cliff_mult: float = 1.8
 
+@export_group("Телекинез (захват на расстоянии)")
+## Сколько держать E, чтобы вместо «взять в руки» ЗАФИКСИРОВАТЬ режим таскания (как Z-захват в Skyrim):
+## по истечении этого времени бревно «защёлкивается» и висит уже без зажатой E, повторное нажатие E —
+## отпустить. Короткий тап (короче этого) по бревну — взять на плечо, как раньше.
+@export var manip_hold_time: float = 0.4
+## Максимальный «рабочий» вес бревна (кг), которое можно таскать телекинезом. Тяжёлые — никак.
+@export var manip_capacity: float = 70.0
+## Дистанция удержания (м) перед камерой: на ней висит точка хвата. Зажали ближе/дальше — зажимаем сюда.
+@export var manip_distance_min: float = 1.2
+@export var manip_distance_max: float = 3.0
+## Жёсткость пружины, тянущей точку хвата к цели (1/с²): больше — резче «прилипает» и меньше провисает.
+@export var manip_stiffness: float = 90.0
+## Демпфирование пружины (1/с): гасит колебания у точки хвата, чтобы бревно не «пружинило».
+@export var manip_damping: float = 14.0
+## Потолок ускорения пружины (м/с²): не даёт бревну «выстрелить», если цель далеко (рывком мышью).
+@export var manip_max_accel: float = 140.0
+## Угловое демпфирование бревна на время захвата (1/с): стабилизирует «висящее» бревно. Взятое за край
+## всё равно стабильно (ЦМ висит ниже), за центр — болтается (момента нет) — это и есть нужное поведение.
+@export var manip_angular_damp: float = 2.0
+## Физ-масса (кг) держимого бревна на время захвата. Маленькая → мал импульс удара (не таранит тяжёлые
+## брёвна; их к тому же держит трение). Отклик пружины от массы не зависит (сила = ускорение × масса),
+## держится/разворачивается так же. Тачку телекинезом не катаем отдельной логикой (см. wheelbarrow).
+@export var manip_hold_mass: float = 2.0
+## Разрыв (м) между точкой хвата и целью, ПОДОЗРИТЕЛЬНЫЙ на упор. Сам по себе не рвёт захват — нужно,
+## чтобы при этом бревно ещё и почти НЕ ДВИГАЛОСЬ (см. manip_break_progress): иначе это просто таскание.
+@export var manip_break_distance: float = 0.6
+## Насколько (м) точка хвата должна СДВИНУТЬСЯ за окно времени, чтобы считать «бревно тащится, не упор».
+## Меньше этого за manip_break_time при сохраняющемся отставании = бревно дрожит на месте (упёрлось в
+## стену/застряло под ногами) → срываем захват. Резкий мах двигает хват сильно → таймер сбрасывается.
+@export var manip_break_progress: float = 0.3
+## Окно (с): столько бревно должно «дрожать на месте» в отставании, чтобы захват сорвался.
+@export var manip_break_time: float = 0.3
+
 # Здоровье (max_hp, урон, полоска, смерть) — на компоненте Health (узел-ребёнок). Player —
 # фасад: take_damage() пересылает туда. Тунинг max_hp крути на узле Health.
 
@@ -223,6 +256,25 @@ var _dragged: FallingLog = null
 var _drag_speed_mult: float = 1.0
 ## Тачка, которую сейчас толкаем (или null). Пока толкаем — медленнее, без бега/прыжка, топор убран.
 var _barrow: Wheelbarrow = null
+## Бревно, которое таскаем ТЕЛЕКИНЕЗОМ (или null). Висит перед игроком, тянется к точке за прицелом.
+var _manip_log: FallingLog = null
+## Точка хвата В ЛОКАЛЕ бревна (куда смотрел прицел при захвате): от неё (относительно ЦМ) пляшет физика.
+var _manip_grasp_local: Vector3 = Vector3.ZERO
+## Дистанция удержания точки хвата перед камерой (м), зафиксирована при захвате.
+var _manip_distance: float = 2.0
+## Накопленное время «упора» (с): растёт, пока бревно отстало и почти не двигается; на пороге рвём захват.
+var _manip_stuck_time: float = 0.0
+## Где была точка хвата в начале окна подозрения на упор — по сдвигу от неё отличаем таскание от упора.
+var _manip_stuck_anchor: Vector3 = Vector3.ZERO
+## Множители скорости/прыжка от веса держимого телекинезом бревна (та же кривая, что у переноски):
+## тащить «на расстоянии» тяжёлое так же тяжело — игрок медленнее и прыгает ниже.
+var _manip_speed_mult: float = 1.0
+var _manip_jump_mult: float = 1.0
+## Удержание E для входа в телекинез (#manip): копим время с нажатия, на пороге берём бревно «на
+## расстоянии». _e_consumed — порог уже сработал (отпускание E НЕ должно вызвать обычный тап-подбор).
+var _e_holding: bool = false
+var _e_hold_timer: float = 0.0
+var _e_consumed: bool = false
 ## Направление тела (yaw, рад) в момент начала волока — от него считаем ограничение поворота.
 var _drag_yaw_center: float = 0.0
 ## Free-look камеры при тачке (yaw-смещение, рад) ОТНОСИТЕЛЬНО носа тачки. Мышь крутит ТОЛЬКО его
@@ -307,6 +359,11 @@ func held_barrow() -> Wheelbarrow:
 	return _barrow
 
 
+## Бревно, которое таскаем телекинезом (или null) — по нему машина состояний включает режим захвата.
+func manipulated_log() -> FallingLog:
+	return _manip_log
+
+
 ## Бревно на волоке (или null).
 func dragged_log() -> FallingLog:
 	return _dragged
@@ -378,9 +435,27 @@ func _unhandled_input(event: InputEvent) -> void:
 			deg_to_rad(max_look_angle)
 		)
 
-	# E — поднять бревно, на которое смотрим / бросить то, что несём.
+	# E — контекстное действие. Если целимся в ЛЁГКОЕ бревно налегке, нажатие НЕ срабатывает сразу:
+	# короткий тап → взять на плечо (как раньше), удержание → телекинез (#manip, см. _process/release).
+	# Во всех прочих случаях (тачка, тяжёлое бревно, занятые руки) E действует сразу по нажатию.
 	if event.is_action_pressed("interact") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		_toggle_carry()
+		if _manip_log != null:
+			# Захват ЗАФИКСИРОВАН (висит без зажатой E) — нажатие E его ОТПУСКАЕТ.
+			_stop_manipulate()
+		elif _can_begin_manip_hold():
+			_e_holding = true
+			_e_hold_timer = 0.0
+			_e_consumed = false
+		else:
+			_toggle_carry()
+	elif event.is_action_released("interact") and _e_holding:
+		# Отпустили активирующее удержание: успели захватить (порог прошёл) → ФИКСИРУЕМ, бревно остаётся
+		# висеть и без кнопки; не дошли до порога → это был быстрый тап = взять на плечо.
+		if _manip_log == null and not _e_consumed:
+			_toggle_carry()
+		_e_holding = false
+		_e_consumed = false
+		_e_hold_timer = 0.0
 
 	# Esc отпускает курсор, клик по окну — снова захватывает.
 	if event.is_action_pressed("ui_cancel"):
@@ -417,6 +492,17 @@ func _process(delta: float) -> void:
 	_model.position = _model_base + _step_offset
 
 	_update_prompt()
+
+	# Удержание E → телекинез (#manip): копим время с нажатия; на пороге, если всё ещё целимся в лёгкое
+	# бревно налегке — берём его «на расстоянии». Порог отмечаем _e_consumed, чтобы отпускание E потом НЕ
+	# вызвало обычный тап-подбор (тап = только быстрое нажатие-отпускание короче manip_hold_time).
+	if _e_holding and not _e_consumed and _manip_log == null:
+		_e_hold_timer += delta
+		if _e_hold_timer >= manip_hold_time:
+			_e_consumed = true
+			var fl := _look_pickup_log(true)
+			if fl != null and fl.get_weight() <= manip_capacity and _is_idle():
+				_start_manipulate(fl)
 
 
 # Подсказка под прицелом: что сделает E прямо сейчас. Тексты — через tr() (ключи в
@@ -455,6 +541,109 @@ func _toggle_carry() -> void:
 	# Один пересчёт луча на всё контекстное E (и бревно, и тачка под прицелом — свежие).
 	chop_ray.force_shapecast_update()
 	_state_machine.active().handle_interact()
+
+
+## Руки свободны и ничего не держим (idle) — для выбора, действовать по нажатию или по тапу/удержанию.
+func _is_idle() -> bool:
+	return _barrow == null and _dragged == null and _carried_logs.is_empty() and _manip_log == null
+
+
+# Стоит ли ОТЛОЖИТЬ нажатие E (тап/удержание): только если налегке целимся в ЛЁГКОЕ бревно. Тогда тап
+# = взять на плечо, удержание = телекинез. Иначе (тачка/тяжёлое/занятые руки) E срабатывает сразу.
+func _can_begin_manip_hold() -> bool:
+	if not _is_idle():
+		return false
+	var fl := _look_pickup_log(true)
+	return fl != null and fl.get_weight() <= manip_capacity
+
+
+# Включаем телекинез: точка хвата = куда смотрел прицел (тонкий луч в бревно). Запоминаем её В ЛОКАЛЕ
+# бревна и дистанцию удержания; дальше update_manipulation каждый физкадр тянет её к цели за прицелом.
+func _start_manipulate(fl: FallingLog) -> void:
+	var origin := camera.global_position
+	var dir := -camera.global_transform.basis.z
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(origin, origin + dir * 4.0)
+	q.exclude = [get_rid()]
+	q.collision_mask = 4  # только бревно (слой falling_tree)
+	var hit := space.intersect_ray(q)
+	var hit_point: Vector3 = (hit["position"] as Vector3) if (not hit.is_empty() and hit.get("collider") == fl) else fl.global_position
+	_manip_log = fl
+	_manip_grasp_local = fl.global_transform.affine_inverse() * hit_point
+	_manip_distance = clampf(origin.distance_to(hit_point), manip_distance_min, manip_distance_max)
+	_manip_stuck_time = 0.0
+	# Вес держимого бревна замедляет/сажает прыжок так же, как при переноске (та же кривая по весу).
+	var w := fl.get_weight()
+	_manip_speed_mult = _carry_speed_for(w)
+	_manip_jump_mult = _carry_jump_for(w)
+	# Топор в руках не нужен (и рубить во время захвата нельзя): _axe_stowed заодно гасит can_chop.
+	_axe_stowed = true
+	axe.visible = false
+	fl.begin_manipulate(self, manip_angular_damp, manip_hold_mass)
+
+
+# Отпускаем телекинез: бревно снова обычное физтело (упадёт/осядет), коллизию с игроком возвращаем.
+func _stop_manipulate() -> void:
+	if _manip_log != null and is_instance_valid(_manip_log):
+		_manip_log.end_manipulate(self)
+	_manip_log = null
+	# Возвращаем топор в руку (и рубку).
+	_axe_stowed = false
+	axe.visible = true
+
+
+## Мировая точка хвата держимого телекинезом бревна (или null) — к ней аниматор тянет кисти рук.
+func manip_grasp_world() -> Variant:
+	if _manip_log == null or not is_instance_valid(_manip_log):
+		return null
+	return _manip_log.to_global(_manip_grasp_local)
+
+
+## Множитель скорости от веса держимого телекинезом бревна (1 — налегке).
+func manip_speed_mult() -> float:
+	return _manip_speed_mult
+
+
+## Множитель высоты прыжка от веса держимого телекинезом бревна (1 — налегке).
+func manip_jump_mult() -> float:
+	return _manip_jump_mult
+
+
+# Физика захвата (#manip): тянем точку хвата к цели перед камерой пружиной В ТОЧКЕ ХВАТА. Силу прикладываем
+# как центральную + момент r×F относительно ЦМ — поэтому взятое за край бревно гравитация разворачивает
+# центром вниз (висит стабильно), а взятое за центр (r≈0, момента нет) — свободно болтается. Зовёт состояние.
+func update_manipulation(delta: float) -> void:
+	var fl := _manip_log
+	if fl == null or not is_instance_valid(fl):
+		_stop_manipulate()
+		return
+	var target := camera.global_position + (-camera.global_transform.basis.z) * _manip_distance
+	var com := fl.to_global(Vector3(0.0, fl.body_center_y(), 0.0))
+	var grasp := fl.to_global(_manip_grasp_local)
+	var r := grasp - com
+	var vel_at := fl.linear_velocity + fl.angular_velocity.cross(r)
+	var to_t := target - grasp
+	var dist := to_t.length()
+	# Срыв захвата ТОЛЬКО при реальном упоре: бревно отстало от цели (dist) И за окно времени почти не
+	# сдвинулось (дрожит на месте у стены/под ногами). Резкий мах/таскание двигают хват на manip_break_progress
+	# и больше → окно сбрасывается, из рук не выпадает. Стоячий упор за manip_break_time → отпускаем.
+	if dist > manip_break_distance:
+		if _manip_stuck_time <= 0.0:
+			_manip_stuck_anchor = grasp
+		_manip_stuck_time += delta
+		if grasp.distance_to(_manip_stuck_anchor) >= manip_break_progress:
+			_manip_stuck_time = 0.0       # заметно продвинулись — это таскание, не упор
+		elif _manip_stuck_time >= manip_break_time:
+			_stop_manipulate()
+			return
+	else:
+		_manip_stuck_time = 0.0
+	var accel := to_t * manip_stiffness - vel_at * manip_damping
+	accel = accel.limit_length(manip_max_accel)
+	var force := accel * fl.mass
+	fl.sleeping = false
+	fl.apply_central_force(force)
+	fl.apply_torque(r.cross(force))
 
 
 # Берём бревно в руки на плечо. Лёгкое (< доли предела) — на левое, топор в правой руке;

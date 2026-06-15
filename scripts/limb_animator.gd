@@ -39,7 +39,14 @@ func _process(delta: float) -> void:
 	# топор — правая рука на рукоять вьюмодели (#9c.2). Свободные руки машут в противофазе ногам.
 	var barrow := _player.held_barrow()
 	var dragged := _player.dragged_log()
-	if barrow != null:
+	var manip_grasp = _player.manip_grasp_world()  # Variant: Vector3 (телекинез) или null
+	if manip_grasp != null:
+		# Телекинез (#manip): обе руки тянутся к ТОЧКЕ ХВАТА держимого бревна — по тени видно, что персонаж
+		# держит предмет перед собой на вытянутых руках (топор при этом убран).
+		var right := _player.global_transform.basis.x
+		_aim_arm(_arm_l, (manip_grasp as Vector3) - right * 0.18, k)
+		_aim_arm(_arm_r, (manip_grasp as Vector3) + right * 0.18, k)
+	elif barrow != null:
 		var right := barrow.global_transform.basis.x
 		var g := barrow.grab_point_world()
 		_aim_arm(_arm_l, g - right * 0.32, k)

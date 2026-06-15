@@ -13,6 +13,7 @@ extends Node
 @onready var _carry: PlayerState = $Carry
 @onready var _drag: PlayerState = $Drag
 @onready var _barrow: PlayerState = $Barrow
+@onready var _manipulate: PlayerState = $Manipulate
 
 
 func _physics_process(delta: float) -> void:
@@ -21,6 +22,8 @@ func _physics_process(delta: float) -> void:
 
 # Активное состояние (его дёргает и Player для подсказки/E). Публичное.
 func active() -> PlayerState:
+	if _player.manipulated_log() != null:
+		return _manipulate
 	if _player.held_barrow() != null:
 		return _barrow
 	if _player.dragged_log() != null:

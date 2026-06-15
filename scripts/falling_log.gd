@@ -88,6 +88,11 @@ var _spawn_cfg: Dictionary = {}
 var _break_bottom: bool = false
 var _break_top: bool = false
 
+# Бревно сдано в ПОЛЕННИЦУ (#woodpile): остаётся динамическим (укладывается/рассыпается физикой), но не
+# подбирается/не рубится и повторно НЕ продаётся. _no_resell держит это навсегда (даже если раскатилось).
+var _stockpiled: bool = false
+var _no_resell: bool = false
+
 # Гашение вращения на ВРЕМЯ падения — низкое, чтобы гравитация свободно валила.
 const FALL_ANGULAR_DAMP := 0.1
 # Ниже этого наклона (рад) и при почти нулевом вращении считаем, что ствол "завис"
@@ -102,6 +107,10 @@ const REST_DETACH_TIME := 0.5
 # то, что плоские грани низкополигонального цилиндра лежат внутри номинального радиуса — иначе
 # бревно «висит» над землёй/соседним бревном на пару см. Поверхность меша слегка утапливается.
 const COLLISION_SHRINK := 0.015
+# На сколько метров ВЫШЕ прицельной поверхности спавним брошенное бревно (#woodpile-drop): падает и
+# само укладывается физикой, не застревая в бортах загона/соседних брёвнах. Мало — не успевает обойти
+# препятствие, много — роняем «с неба» и оно скачет.
+const DROP_FALL_HEIGHT := 0.4
 
 
 ## Запускает падение. fall_direction — горизонтальное направление падения; length и
@@ -393,6 +402,10 @@ func _split(site) -> void:
 		var keep_a := ProceduralTrunk.slice_carves(carves, total, 0.0, cut_y, len_a)
 		var pa := FallingLog.spawn(parent, _spawn_cfg, xf, len_a, br, r_cut,
 				ring, ang, _break_bottom, true, keep_a)
+		# Куски «оплаченного» (складского) бревна тоже непродаваемы — иначе из штабеля можно было бы
+		# нарубить бесплатных денег (#woodpile). _stockpiled НЕ наследуем: кусок — свободное полено
+		# (его можно возить тачкой без авто-сброса), просто продать его уже нельзя.
+		pa._no_resell = _no_resell
 		pa.place_resting()
 
 	# Верхняя половина: от реза до верха. Origin сдвигаем на cut_y вдоль оси (+ зазор,
@@ -405,6 +418,7 @@ func _split(site) -> void:
 		var keep_b := ProceduralTrunk.slice_carves(carves, total, cut_y, total, len_b)
 		var pb := FallingLog.spawn(parent, _spawn_cfg, xf_b, len_b, r_cut, tr,
 				ring, ang, true, _break_top, keep_b)
+		pb._no_resell = _no_resell
 		pb.place_resting()
 
 	queue_free()
@@ -424,6 +438,40 @@ func place_resting() -> void:
 	add_to_group("pickup_log")
 	_dmg_arm_timer = damage_arm_delay
 	_active = true
+
+
+# Физ-масса (кг) держимого бревна ДО телекинеза — чтобы вернуть её на отпускании.
+var _pre_manip_mass: float = 1.0
+# Бревно держат телекинезом: пока true — оно НЕ наносит урон игроку (он сам его держит/машет им, см.
+# _apply_impact_damage). Иначе резкий мах держимым бревном «бил» бы игрока, который его и держит.
+var _manipulated: bool = false
+
+# Включаем режим ТЕЛЕКИНЕЗА (#manip): бревно остаётся свободным физтелом в мире (игрок тянет его
+# силой в точке хвата — см. player.update_manipulation), но мы стабилизируем его и убираем коллизию с
+# игроком, чтобы «висящее перед лицом» бревно не толкало капсулу. holder — игрок (для исключения пары).
+# hold_mass — НИЗКАЯ физ-масса на время захвата: отклик пружины от массы не зависит (сила = ускорение ×
+# масса), но ИМПУЛЬС (масса × скорость) падает в сотни раз → держимым бревном НЕЛЬЗЯ таранить тачку и
+# тяжёлые брёвна (закрыли багоюз обхода грузоподъёмности). На отпускании массу возвращаем.
+func begin_manipulate(holder: Node3D, angular_damp_hold: float, hold_mass: float) -> void:
+	_active = true
+	freeze = false
+	sleeping = false
+	can_sleep = false               # пока держим, не давать заснуть (иначе перестанет реагировать на силу)
+	angular_damp = angular_damp_hold
+	_pre_manip_mass = mass
+	mass = hold_mass
+	_manipulated = true
+	add_collision_exception_with(holder)
+
+
+# Отпускаем телекинез: возвращаем обычные массу/демпфирование/сон и коллизию с игроком.
+func end_manipulate(holder: Node3D) -> void:
+	can_sleep = true
+	angular_damp = down_angular_damp
+	mass = _pre_manip_mass
+	_manipulated = false
+	sleeping = false
+	remove_collision_exception_with(holder)
 
 
 # Берём бревно на плечо: вешаем на держатель (камеру), глушим физику и коллизию.
@@ -459,12 +507,46 @@ func drop(new_parent: Node, world_pos: Vector3, forward: Vector3) -> void:
 	y = y.normalized()
 	var x := Vector3.UP.cross(y).normalized()
 	var z := x.cross(y).normalized()
-	# Поднимаем на радиус, чтобы лежачий цилиндр не оказался наполовину в полу.
+	# Спавним НЕ впритык к поверхности, а чуть ВЫШЕ (радиус + запас) — бревно ПАДАЕТ и САМО укладывается
+	# физикой, обходя соседние стенки/брёвна (борта загона поленницы, соседние полешки). Жёсткая укладка
+	# впритык не учитывала соседей: длинное бревно появлялось внутри борта, проникало сквозь него и
+	# застревало. С падением солвер расталкивает его на место (или оно ложится поверх), без застреваний.
 	var r := maxf(_gen.bottom_radius, _gen.top_radius) if _gen else 0.3
-	global_transform = Transform3D(Basis(x, y, z), world_pos + Vector3.UP * r)
+	global_transform = Transform3D(Basis(x, y, z), world_pos + Vector3.UP * (r + DROP_FALL_HEIGHT))
 	freeze = false
 	sleeping = false
 	place_resting()
+
+
+## Лежит ли бревно в штабеле поленницы (#woodpile). Тачке нужно, чтобы ОТПУСТИТЬ из приморозки груз,
+## который заехал в зону сдачи и продался прямо из кузова (иначе тачка дёргала бы его обратно).
+func is_stockpiled() -> bool:
+	return _stockpiled
+
+
+## Держат ли бревно телекинезом прямо сейчас. Тачке нужно, чтобы ИГНОРИРОВАТЬ толчки от такого бревна
+## (иначе им можно катать тачку в обход механики «взять за ручки», #manip-exploit).
+func is_manipulated() -> bool:
+	return _manipulated
+
+
+## Можно ли это бревно продать в зоне сдачи. Один раз продали (ушло в штабель) — больше нельзя,
+## иначе осыпавшееся из поленницы бревно, закатившись обратно в зону, продалось бы повторно (#woodpile).
+func can_be_sold() -> bool:
+	return not _no_resell
+
+
+## Помечаем бревно как СКЛАДСКОЕ — продано в поленницу (#woodpile). Остаётся ПОЛНОЦЕННЫМ бревном:
+## его так же можно РУБИТЬ (расколется на куски) и ВЫТАСКИВАТЬ (подобрать/увезти) — поэтому держим в
+## группах choppable/pickup, НЕ замораживаем и массу не трогаем (укладывается/рассыпается обычной
+## физикой в загоне). Единственное ограничение — «уже оплачено»: повторно продать нельзя (_no_resell),
+## и это свойство наследуют все куски при расколе, чтобы нельзя было нарубить из штабеля «бесплатных
+## денег». Вес каждого куска считается как обычно (по размерам), экономику это не трогает.
+func stockpile() -> void:
+	_stockpiled = true
+	_no_resell = true
+	add_to_group("choppable_log")
+	add_to_group("pickup_log")
 
 
 func _physics_process(delta: float) -> void:
@@ -539,7 +621,7 @@ func _damp_roll(delta: float) -> void:
 func _apply_impact_damage() -> void:
 	# Бревно на волоке игрок держит сам — оно его не "бьёт"; пауза между ударами и «взвод»
 	# после спавна/укладки тоже глушат урон (иначе оседание куска у ног = мнимая смерть).
-	if _dragging or _dmg_cd > 0.0 or _dmg_arm_timer > 0.0:
+	if _dragging or _manipulated or _dmg_cd > 0.0 or _dmg_arm_timer > 0.0:
 		return
 	# Концы бревна: коллизия в локале тела тянется по Y от 0 до _length. «Смертельный» отрезок
 	# урезаем с обоих концов на hit_end_margin — торцы (в т.ч. край сруба у ног) не бьют.

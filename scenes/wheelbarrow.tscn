@@ -24,10 +24,10 @@ radius = 0.35
 size = Vector3(1.0, 0.3, 1.4)
 
 [sub_resource type="BoxShape3D" id="WallSideShape"]
-size = Vector3(0.06, 0.5, 1.4)
+size = Vector3(0.18, 0.5, 1.4)
 
 [sub_resource type="BoxShape3D" id="WallEndShape"]
-size = Vector3(1.0, 0.5, 0.06)
+size = Vector3(1.0, 0.5, 0.18)
 
 [sub_resource type="BoxShape3D" id="HandleColShape"]
 size = Vector3(0.96, 0.16, 0.9)
