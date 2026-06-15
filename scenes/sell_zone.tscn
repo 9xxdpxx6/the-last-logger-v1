@@ -1,0 +1,77 @@
+[gd_scene load_steps=10 format=3]
+
+[ext_resource type="Script" path="res://scripts/sell_zone.gd" id="1_sellzone"]
+
+[sub_resource type="StandardMaterial3D" id="WoodMat"]
+albedo_color = Color(0.45, 0.32, 0.2, 1)
+
+[sub_resource type="StandardMaterial3D" id="PadMat"]
+albedo_color = Color(0.3, 0.28, 0.22, 1)
+
+[sub_resource type="BoxMesh" id="PadMesh"]
+material = SubResource("PadMat")
+size = Vector3(3.0, 0.05, 3.0)
+
+[sub_resource type="BoxMesh" id="BackMesh"]
+material = SubResource("WoodMat")
+size = Vector3(3.0, 0.7, 0.2)
+
+[sub_resource type="BoxMesh" id="SideMesh"]
+material = SubResource("WoodMat")
+size = Vector3(0.2, 0.7, 3.0)
+
+[sub_resource type="BoxShape3D" id="BackShape"]
+size = Vector3(3.0, 0.7, 0.2)
+
+[sub_resource type="BoxShape3D" id="SideShape"]
+size = Vector3(0.2, 0.7, 3.0)
+
+[sub_resource type="BoxShape3D" id="ZoneShape"]
+size = Vector3(2.6, 1.6, 2.6)
+
+[node name="SellZone" type="Area3D"]
+collision_layer = 0
+collision_mask = 4
+script = ExtResource("1_sellzone")
+
+[node name="Zone" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8, 0)
+shape = SubResource("ZoneShape")
+
+[node name="Pad" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.025, 0)
+mesh = SubResource("PadMesh")
+
+[node name="Bin" type="StaticBody3D" parent="."]
+
+[node name="BackWall" type="MeshInstance3D" parent="Bin"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.35, -1.4)
+mesh = SubResource("BackMesh")
+
+[node name="BackCol" type="CollisionShape3D" parent="Bin"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.35, -1.4)
+shape = SubResource("BackShape")
+
+[node name="LeftWall" type="MeshInstance3D" parent="Bin"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.4, 0.35, 0)
+mesh = SubResource("SideMesh")
+
+[node name="LeftCol" type="CollisionShape3D" parent="Bin"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.4, 0.35, 0)
+shape = SubResource("SideShape")
+
+[node name="RightWall" type="MeshInstance3D" parent="Bin"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.4, 0.35, 0)
+mesh = SubResource("SideMesh")
+
+[node name="RightCol" type="CollisionShape3D" parent="Bin"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.4, 0.35, 0)
+shape = SubResource("SideShape")
+
+[node name="Sign" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.15, -1.28)
+pixel_size = 0.005
+text = "СДАЧА ДРЕВЕСИНЫ
+0 / 200 кг"
+font_size = 96
+outline_size = 24

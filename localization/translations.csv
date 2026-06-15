@@ -10,3 +10,8 @@ PROMPT_BARROW_LOAD,"[E] Load: {cur}+[color=#{col}]{add}[/color]/{cap} kg","[E] �
 PROMPT_BARROW_FULL,"Barrow is full","Тачка полна"
 PROMPT_BARROW_TOO_LONG,"Won't fit by size","Не влезет по размеру"
 PROMPT_CARRY_FULL,"Hands full","Руки заняты"
+PROMPT_MANIP_HOLD,"[E] Release","[E] Отпустить"
+HUD_MONEY,"$ {money}","$ {money}"
+HUD_QUOTA,"Daily quota: {cur} / {goal} kg","Норма дня: {cur} / {goal} кг"
+SELL_TITLE,"TIMBER DROP-OFF","СДАЧА ДРЕВЕСИНЫ"
+SELL_AMOUNT,"{cur} / {goal} kg","{cur} / {goal} кг"

@@ -10,6 +10,8 @@
 [ext_resource type="Script" path="res://scripts/state_carry.gd" id="8_carry"]
 [ext_resource type="Script" path="res://scripts/state_drag.gd" id="9_drag"]
 [ext_resource type="Script" path="res://scripts/state_barrow.gd" id="10_barrow"]
+[ext_resource type="Script" path="res://scripts/hud.gd" id="11_hud"]
+[ext_resource type="Script" path="res://scripts/state_manipulate.gd" id="12_manip"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 radius = 0.3
@@ -136,6 +138,40 @@ collision_mask = 36
 [node name="Axe" parent="Camera3D" instance=ExtResource("2_axe")]
 
 [node name="HUD" type="CanvasLayer" parent="." unique_id=1150539464]
+script = ExtResource("11_hud")
+
+[node name="Money" type="Label" parent="HUD"]
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -216.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = 44.0
+grow_horizontal = 0
+text = "$ 0"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="QuotaBar" type="ProgressBar" parent="HUD"]
+anchors_preset = 0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 256.0
+offset_bottom = 40.0
+max_value = 200.0
+value = 0.0
+show_percentage = false
+
+[node name="Label" type="Label" parent="HUD/QuotaBar"]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "Норма дня: 0 / 200 кг"
+horizontal_alignment = 1
+vertical_alignment = 1
 
 [node name="Crosshair" type="Label" parent="HUD" unique_id=481626461]
 anchors_preset = 8
@@ -216,3 +252,6 @@ script = ExtResource("9_drag")
 
 [node name="Barrow" type="Node" parent="StateMachine"]
 script = ExtResource("10_barrow")
+
+[node name="Manipulate" type="Node" parent="StateMachine"]
+script = ExtResource("12_manip")
