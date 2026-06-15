@@ -1,0 +1,197 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/day_ui.gd" id="1_dayui"]
+
+[node name="DayUI" type="CanvasLayer"]
+layer = 10
+process_mode = 3
+script = ExtResource("1_dayui")
+
+[node name="Clock" type="Label" parent="."]
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -140.0
+offset_top = 12.0
+offset_right = 140.0
+offset_bottom = 44.0
+horizontal_alignment = 1
+text = ""
+
+[node name="Summary" type="Control" parent="."]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Dim" type="ColorRect" parent="Summary"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0, 0, 0, 0.72)
+
+[node name="Panel" type="PanelContainer" parent="Summary"]
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -240.0
+offset_top = -160.0
+offset_right = 240.0
+offset_bottom = 160.0
+
+[node name="Margin" type="MarginContainer" parent="Summary/Panel"]
+theme_override_constants/margin_left = 28
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 28
+theme_override_constants/margin_bottom = 24
+
+[node name="VBox" type="VBoxContainer" parent="Summary/Panel/Margin"]
+theme_override_constants/separation = 18
+
+[node name="Title" type="Label" parent="Summary/Panel/Margin/VBox"]
+horizontal_alignment = 1
+text = ""
+
+[node name="Body" type="Label" parent="Summary/Panel/Margin/VBox"]
+horizontal_alignment = 1
+text = ""
+
+[node name="Continue" type="Button" parent="Summary/Panel/Margin/VBox"]
+text = "SUMMARY_CONTINUE"
+
+[node name="Menu" type="Control" parent="."]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Dim" type="ColorRect" parent="Menu"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0, 0, 0, 0.6)
+
+[node name="Panel" type="PanelContainer" parent="Menu"]
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -170.0
+offset_top = -190.0
+offset_right = 170.0
+offset_bottom = 190.0
+
+[node name="Margin" type="MarginContainer" parent="Menu/Panel"]
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="VBox" type="VBoxContainer" parent="Menu/Panel/Margin"]
+theme_override_constants/separation = 14
+
+[node name="Title" type="Label" parent="Menu/Panel/Margin/VBox"]
+horizontal_alignment = 1
+text = "MENU_TITLE"
+
+[node name="Resume" type="Button" parent="Menu/Panel/Margin/VBox"]
+text = "MENU_RESUME"
+
+[node name="Save" type="Button" parent="Menu/Panel/Margin/VBox"]
+text = "MENU_SAVE"
+
+[node name="NewGame" type="Button" parent="Menu/Panel/Margin/VBox"]
+text = "MENU_NEW_GAME"
+
+[node name="Load" type="Button" parent="Menu/Panel/Margin/VBox"]
+text = "MENU_LOAD"
+
+[node name="Status" type="Label" parent="Menu/Panel/Margin/VBox"]
+horizontal_alignment = 1
+text = ""
+
+[node name="LoadList" type="Control" parent="."]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Dim" type="ColorRect" parent="LoadList"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0, 0, 0, 0.6)
+
+[node name="Panel" type="PanelContainer" parent="LoadList"]
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -260.0
+offset_top = -220.0
+offset_right = 260.0
+offset_bottom = 220.0
+
+[node name="Margin" type="MarginContainer" parent="LoadList/Panel"]
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="VBox" type="VBoxContainer" parent="LoadList/Panel/Margin"]
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="LoadList/Panel/Margin/VBox"]
+horizontal_alignment = 1
+text = "LOAD_TITLE"
+
+[node name="Scroll" type="ScrollContainer" parent="LoadList/Panel/Margin/VBox"]
+custom_minimum_size = Vector2(460, 300)
+
+[node name="Items" type="VBoxContainer" parent="LoadList/Panel/Margin/VBox/Scroll"]
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="Back" type="Button" parent="LoadList/Panel/Margin/VBox"]
+text = "LOAD_BACK"
+
+[node name="Confirm" type="Control" parent="."]
+visible = false
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Dim" type="ColorRect" parent="Confirm"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0, 0, 0, 0.7)
+
+[node name="Panel" type="PanelContainer" parent="Confirm"]
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -250.0
+offset_top = -110.0
+offset_right = 250.0
+offset_bottom = 110.0
+
+[node name="Margin" type="MarginContainer" parent="Confirm/Panel"]
+theme_override_constants/margin_left = 28
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 28
+theme_override_constants/margin_bottom = 24
+
+[node name="VBox" type="VBoxContainer" parent="Confirm/Panel/Margin"]
+theme_override_constants/separation = 20
+
+[node name="Message" type="Label" parent="Confirm/Panel/Margin/VBox"]
+custom_minimum_size = Vector2(430, 0)
+horizontal_alignment = 1
+autowrap_mode = 2
+text = ""
+
+[node name="Buttons" type="HBoxContainer" parent="Confirm/Panel/Margin/VBox"]
+alignment = 1
+theme_override_constants/separation = 16
+
+[node name="Yes" type="Button" parent="Confirm/Panel/Margin/VBox/Buttons"]
+custom_minimum_size = Vector2(150, 0)
+text = ""
+
+[node name="No" type="Button" parent="Confirm/Panel/Margin/VBox/Buttons"]
+custom_minimum_size = Vector2(150, 0)
+text = "CONFIRM_CANCEL"

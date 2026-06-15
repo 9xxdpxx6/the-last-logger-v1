@@ -7,8 +7,11 @@ func physics_update(delta: float) -> void:
 
 
 func prompt_text() -> String:
-	# Навёлся на тачку — взять/толкать (с грузом показываем сколько лежит/влезет).
+	# Навёлся на кровать — лечь спать (завершить день).
 	var aim := _player._aim_target()
+	if aim.get("type") == "bed":
+		return tr("PROMPT_SLEEP")
+	# Навёлся на тачку — взять/толкать (с грузом показываем сколько лежит/влезет).
 	if aim.get("type") == "barrow":
 		var ab := aim["barrow"] as Wheelbarrow
 		var load := ab.current_load()
@@ -33,6 +36,9 @@ func prompt_text() -> String:
 
 func handle_interact() -> void:
 	var aim := _player._aim_target()
+	if aim.get("type") == "bed":
+		_player.request_sleep()
+		return
 	if aim.get("type") == "barrow":
 		_player._start_barrow(aim["barrow"])
 		return

@@ -71,7 +71,6 @@ shape = SubResource("SideShape")
 [node name="Sign" type="Label3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.15, -1.28)
 pixel_size = 0.005
-text = "СДАЧА ДРЕВЕСИНЫ
-0 / 200 кг"
+text = ""
 font_size = 96
 outline_size = 24

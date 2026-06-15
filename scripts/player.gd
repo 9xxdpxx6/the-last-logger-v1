@@ -457,10 +457,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		_e_consumed = false
 		_e_hold_timer = 0.0
 
-	# Esc отпускает курсор, клик по окну — снова захватывает.
-	if event.is_action_pressed("ui_cancel"):
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	elif event is InputEventMouseButton and event.pressed \
+	# Esc открывает меню паузы — этим ведает DayUI (перехватывает ui_cancel до игрока). Здесь только
+	# повторный захват курсора кликом по окну (например, после Alt-Tab), когда игра НЕ на паузе.
+	if event is InputEventMouseButton and event.pressed \
 			and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -546,6 +545,11 @@ func _toggle_carry() -> void:
 ## Руки свободны и ничего не держим (idle) — для выбора, действовать по нажатию или по тапу/удержанию.
 func _is_idle() -> bool:
 	return _barrow == null and _dragged == null and _carried_logs.is_empty() and _manip_log == null
+
+
+## Лечь спать (E по кровати, см. state_idle). Завершает день — DayNight поднимет экран итогов.
+func request_sleep() -> void:
+	DayNight.request_sleep()
 
 
 # Стоит ли ОТЛОЖИТЬ нажатие E (тап/удержание): только если налегке целимся в ЛЁГКОЕ бревно. Тогда тап
@@ -773,6 +777,8 @@ func _stop_drag() -> void:
 func _aim_target() -> Dictionary:
 	for i in chop_ray.get_collision_count():
 		var c := chop_ray.get_collider(i)
+		if (c as Node).is_in_group("bed"):
+			return {"type": "bed", "bed": c}
 		if c is Wheelbarrow:
 			return {"type": "barrow", "barrow": c}
 		if c is FallingLog and (c as Node).is_in_group("pickup_log"):

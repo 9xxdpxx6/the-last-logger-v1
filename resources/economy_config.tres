@@ -7,3 +7,4 @@ script = ExtResource("1_econcfg")
 price_per_kg = 1.5
 daily_quota_kg = 200.0
 act_evac_goal = 5000.0
+collect_interval_days = 3

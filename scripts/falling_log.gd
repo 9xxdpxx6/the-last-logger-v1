@@ -547,6 +547,8 @@ func stockpile() -> void:
 	_no_resell = true
 	add_to_group("choppable_log")
 	add_to_group("pickup_log")
+	# Складское бревно — кандидат на «вывоз раз в N дней» (#collect): по группе зона despawn'ит штабель.
+	add_to_group("stockpiled")
 
 
 func _physics_process(delta: float) -> void:
