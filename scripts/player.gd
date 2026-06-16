@@ -5,6 +5,10 @@ class_name Player
 @export var walk_speed: float = 4.0
 ## Во сколько раз быстрее игрок двигается при беге (Shift).
 @export var run_multiplier: float = 1.6
+## Насколько СИЛЬНЕЕ заросли тормозят, когда в руках/тачке/телекинезе груз (0 — как налегке, 1 —
+## вдвойне: множитель зарослей возводится в квадрат). Тащить/катить/нести через кусты тяжелее, чем
+## пройти налегке, поэтому в зарослях груз ощутимо вязнет.
+@export var cargo_foliage_bite: float = 0.6
 ## Чувствительность мыши (радиан на пиксель движения).
 @export var mouse_sensitivity: float = 0.003
 ## Ограничение наклона взгляда вверх/вниз, в градусах.
@@ -234,6 +238,45 @@ class_name Player
 ## Окно (с): столько бревно должно «дрожать на месте» в отставании, чтобы захват сорвался.
 @export var manip_break_time: float = 0.3
 
+@export_group("Приседание и скрытность")
+## Множитель скорости в присяде (C). Тише и медленнее, но ещё не «невидим».
+@export var crouch_speed_mult: float = 0.5
+## На сколько метров опускается камера в присяде (визуально пригибаемся).
+@export var crouch_cam_dip: float = 0.55
+## Скорость плавного приседания/вставания камеры (1/с).
+@export var crouch_cam_speed: float = 10.0
+## ШУМ ходьбы на открытом месте СТОЯ на полном ходу (0..1 → проценты в HUD). ~0.70 = «до 70%».
+## Бег громче: скорость выше полной ходьбы → шум растёт пропорционально (в HUD упирается в 100%).
+@export var noise_walk: float = 0.7
+## Доля шума ходьбы в ПРИСЯДЕ (0.71 × 0.70 ≈ 0.50 → «50%»).
+@export var crouch_noise_mult: float = 0.71
+## Во сколько раз ГРОМЧЕ шум при БЕГЕ, чем при обычной ходьбе.
+@export var run_noise_mult: float = 1.4
+## Во сколько раз ТИШЕ шорох зарослей В ПРИСЯДЕ (крадёшься — раздвигаешь ветки аккуратно). 0.1 →
+## трава в присяде добавляет всего ~+2% вместо ~+20% на ходу; кусты — ещё меньше.
+@export var crouch_rustle_mult: float = 0.1
+## ВИДИМОСТЬ силуэта стоя и в присяде (0..1) на открытом месте без движения. Присяд — меньше силуэт.
+@export var stand_visibility: float = 1.0
+@export var crouch_visibility: float = 0.6
+## Насколько ДВИЖЕНИЕ срывает укрытие зарослей (0..1): 0.5 — на ходу заросли прячут вдвое хуже,
+## стоя на месте — прячут полностью. Поэтому «замер в кустах» → видимость почти 0.
+@export var move_conceal_penalty: float = 0.5
+## Порог УКРЫТИЯ (0..1): заросль прячет, только если игрок в её объёме НЕ МЕНЬШЕ этой доли. Зашёл
+## по колено в траву / задел куст рукой (< порога) — заметность НЕ меняется. Присяд опускает силуэт,
+## поэтому в невысоком кусте спрятаться можно именно присев.
+@export var conceal_min_cover: float = 0.8
+## Огибающая ШУМА ДЕЙСТВИЙ (рубка/бросок/тачка): звук нарастает/спадает плавно, как звуковая волна,
+## а не скачком. attack — скорость нарастания, release — скорость спада (ед/с).
+@export var noise_attack: float = 9.0
+@export var noise_release: float = 1.4
+## Шум БРОСКА бревна (импульс) и непрерывный фон от ВОЛОКА / КОЛЕСА тачки на ходу (0..~1).
+@export var throw_noise: float = 0.8
+@export var drag_noise: float = 0.45
+@export var barrow_roll_noise: float = 0.4
+## Редкий СКРИП тачки на ходу: громкость импульса и среднее число скрипов в секунду.
+@export var barrow_creak_noise: float = 0.5
+@export var barrow_creak_rate: float = 0.5
+
 # Здоровье (max_hp, урон, полоска, смерть) — на компоненте Health (узел-ребёнок). Player —
 # фасад: take_damage() пересылает туда. Тунинг max_hp крути на узле Health.
 
@@ -307,6 +350,21 @@ var _look_pitch: float = 0.0
 var _kick: Vector3 = Vector3.ZERO
 ## Остаток окна спотыкания (с): пока > 0, walk_locomotion ведёт игрока ПО ИНЕРЦИИ (#barrow-stumble).
 var _stumble_timer: float = 0.0
+## Заросли (Foliage), в которых СЕЙЧАС стоит игрок — копятся по входу/выходу из их зон. Пока набор
+## не пуст, скорость режется на самый густой множитель (см. _foliage_speed_mult).
+var _foliage_zones: Array = []
+## Присяд (переключается на C): тише шаги, ниже силуэт, медленнее ход.
+var _crouching: bool = false
+## Текущее опускание камеры от присяда (м, ≤0): плавно лерпим к -crouch_cam_dip / 0 в _process.
+var _crouch_cam: float = 0.0
+## Огибающая шума действий: _noise_goal — мгновенная «энергия» события (спадает), _noise_pulse —
+## сглаженное значение, что идёт в stealth_noise (плавный подъём/спад вместо скачка).
+var _noise_pulse: float = 0.0
+var _noise_goal: float = 0.0
+## Громкость ПЕРЕДВИЖЕНИЯ (0..1): плавно лерпит к 1, пока игрок ДВИЖЕТСЯ (по факту), и к 0, когда
+## встал. БИНАРНО по факту движения, НЕ по величине скорости — иначе замедление зарослей само же
+## глушило бы шум (в густых кустах ход медленный, но шумный). Сглаживание убирает скачок 0↔шум.
+var _move_loudness: float = 0.0
 
 @onready var camera: Camera3D = $Camera3D
 ## «Руки»: второй коллайдер игрока, занимающий зазор между капсулой и схваченным торцом бревна.
@@ -407,6 +465,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_enter_free_cam()
 		return
 
+	# Присяд — ПЕРЕКЛЮЧЕНИЕ по C (не удержание): нажал — присел, нажал ещё — встал.
+	if event.is_action_pressed("crouch") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		_crouching = not _crouching
+
 	# Обзор мышью работает только когда курсор захвачен.
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		# На волоке камера инертнее (медленнее) — обе руки заняты бревном (наклон взгляда тоже).
@@ -484,13 +546,30 @@ func _process(delta: float) -> void:
 	# (накопили смещение, обратное прыжку — и вверх, и вперёд), теперь плавно гасим его к нулю. Так
 	# подъём выглядит как мягкое всплытие, а не рывок-«склейка кадров» ни по высоте, ни вперёд (#4).
 	_step_offset = _step_offset.lerp(Vector3.ZERO, clampf(step_smooth_speed * delta, 0.0, 1.0))
-	camera.position = _cam_base + _step_offset
+	# Присяд: плавно опускаем/поднимаем камеру к -crouch_cam_dip / 0 (визуально пригибаемся).
+	var crouch_target := -crouch_cam_dip if _crouching else 0.0
+	_crouch_cam = lerpf(_crouch_cam, crouch_target, clampf(crouch_cam_speed * delta, 0.0, 1.0))
+	camera.position = _cam_base + _step_offset + Vector3(0.0, _crouch_cam, 0.0)
 	# То же смещение даём ТЕЛУ: иначе при телепорте на уступ торс прыгает вверх вместе с телом, а
 	# камеру держим внизу — и торс на пару кадров перекрывает пол-экрана (#1). Сдвигая Model на тот же
 	# _step_offset, тело визуально остаётся на месте рядом с камерой и «всплывает» так же мягко.
 	_model.position = _model_base + _step_offset
 
 	_update_prompt()
+
+	# Огибающая шума действий: цель события спадает, сглаженное значение тянется к ней — плавная
+	# «звуковая волна» (резкий удар не даёт скачка индикатора, а нарастает и затухает).
+	_noise_goal = move_toward(_noise_goal, 0.0, noise_release * delta)
+	var nrate := noise_attack if _noise_pulse < _noise_goal else noise_release
+	_noise_pulse = move_toward(_noise_pulse, _noise_goal, nrate * delta)
+	# Громкость хода: 1 пока реально движемся, 0 на месте — плавно, без скачка. ПО ФАКТУ движения, а
+	# не по скорости, чтобы замедление зарослей не глушило шум (продираешься медленно, но шумно).
+	var is_moving := Vector2(velocity.x, velocity.z).length() >= 0.2
+	_move_loudness = move_toward(_move_loudness, 1.0 if is_moving else 0.0, 8.0 * delta)
+	# Тачка на ходу изредка поскрипывает — редкие импульсы шума поверх ровного звука колеса.
+	if _barrow != null and Vector2(velocity.x, velocity.z).length() > 0.3 \
+			and randf() < barrow_creak_rate * delta:
+		add_noise(barrow_creak_noise)
 
 	# Удержание E → телекинез (#manip): копим время с нажатия; на пороге, если всё ещё целимся в лёгкое
 	# бревно налегке — берём его «на расстоянии». Порог отмечаем _e_consumed, чтобы отпускание E потом НЕ
@@ -550,6 +629,118 @@ func _is_idle() -> bool:
 ## Лечь спать (E по кровати, см. state_idle). Завершает день — DayNight поднимет экран итогов.
 func request_sleep() -> void:
 	DayNight.request_sleep()
+
+
+## Игрок вошёл/вышел из зоны зарослей (зовёт Foliage по своим сигналам). Внутри — медленнее.
+## Тип параметра НЕ Foliage намеренно: Foliage уже зависит от Player (class_name), а обратная
+## жёсткая ссылка замыкала бы цикл и падала на холодном импорте — поэтому утиная типизация.
+func enter_foliage(zone: Node) -> void:
+	if zone not in _foliage_zones:
+		_foliage_zones.append(zone)
+
+
+func exit_foliage(zone: Node) -> void:
+	_foliage_zones.erase(zone)
+
+
+# Итоговый множитель скорости от зарослей, в которых стоит игрок: берём САМУЮ ГУСТУЮ (минимум).
+# Заодно чистим исчезнувшие зоны: срезанная заросль делает queue_free БЕЗ сигнала body_exited.
+func _foliage_speed_mult() -> float:
+	var m := 1.0
+	var i := _foliage_zones.size() - 1
+	while i >= 0:
+		var z = _foliage_zones[i]
+		if not is_instance_valid(z):
+			_foliage_zones.remove_at(i)
+		else:
+			m = minf(m, float(z.speed_mult()))
+		i -= 1
+	return m
+
+
+# Множитель зарослей ДЛЯ ПЕРЕДВИЖЕНИЯ: налегке = как есть, а с грузом (тачка/волок/телекинез/переноска)
+# тормозит сильнее (множитель тянем к квадрату по cargo_foliage_bite) — груз через кусты вязнет заметно.
+func _foliage_for_movement() -> float:
+	var f := _foliage_speed_mult()
+	if f < 1.0 and not _is_idle():
+		f = lerpf(f, f * f, clampf(cargo_foliage_bite, 0.0, 1.0))
+	return f
+
+
+# Самый громкий ШОРОХ среди зарослей, где стоит игрок (заросли ДОБАВЛЯЮТ шум при движении). 0 — открыто.
+func _foliage_rustle() -> float:
+	var r := 0.0
+	for z in _foliage_zones:
+		if is_instance_valid(z):
+			r = maxf(r, float(z.rustle()))
+	return r
+
+
+# Лучшее УКРЫТИЕ среди зарослей (0..1): чем гуще, тем сильнее прячет. Засчитываем зону, ТОЛЬКО если
+# силуэт игрока укрыт ею не меньше порога (по колено в траве / краем куста — не прячет). 0 — открыто.
+func _foliage_conceal() -> float:
+	var c := 0.0
+	for z in _foliage_zones:
+		if is_instance_valid(z) and _zone_coverage(z) >= conceal_min_cover:
+			c = maxf(c, float(z.conceal()))
+	return c
+
+
+# Доля силуэта игрока (0..1), укрытая зарослью z. Присяд опускает «макушку», поэтому в невысоком
+# кусте спрятаться можно именно присев. Горизонтально центр игрока должен быть в пятне заросли.
+func _zone_coverage(z) -> float:
+	var feet := global_position.y
+	var body_h := 1.8 - (crouch_cam_dip if _crouching else 0.0)
+	return float(z.coverage(feet, feet + body_h, global_position))
+
+
+## Присели ли сейчас (для аниматора/подсказок/будущего обнаружения).
+func is_crouching() -> bool:
+	return _crouching
+
+
+## Импульс ШУМА действия (рубка/бросок/скрип тачки): поднимает «энергию» события; плавное
+## нарастание/затухание считает _process. Зовут chop_controller (удар) и сам игрок (бросок/тачка).
+func add_noise(amount: float) -> void:
+	_noise_goal = maxf(_noise_goal, clampf(amount, 0.0, 2.0))
+
+
+## ШУМ игрока (0..~2): громче из двух — РОВНЫЙ фон передвижения (шаги×присяд + шорох зарослей +
+## волок/колесо тачки; стоя на месте 0) ИЛИ ИМПУЛЬС действия (удар топора/бросок/скрип). «Слышимость»
+## для будущих врагов/событий; пока выводится индикатором в HUD.
+func stealth_noise() -> float:
+	var continuous := 0.0
+	# Громкость хода (0..1) — ПО ФАКТУ движения, НЕ по величине скорости: в густых кустах ход медленный,
+	# но шумный, поэтому замедление зарослей шум НЕ глушит (раньше был баг — в больших кустах шум падал).
+	var g := _move_loudness
+	if g > 0.001:
+		var steps := noise_walk
+		if _crouching:
+			steps *= crouch_noise_mult
+		elif Input.is_action_pressed("run"):
+			steps *= run_noise_mult
+		# Заросли ДОБАВЛЯЮТ шум (продираешься — шумишь): на ходу/бегу заметно (гуще — больше), в присяде
+		# почти нет (крадёшься аккуратно) — трава ~+2%, кусты меньше. Заметность при этом, наоборот, ниже.
+		var rustle := _foliage_rustle()
+		if _crouching:
+			rustle *= crouch_rustle_mult
+		continuous = (steps + rustle) * g
+		if _dragged != null:
+			continuous += drag_noise * g          # скрежет волочащегося бревна
+		if _barrow != null:
+			continuous += barrow_roll_noise * g    # колесо тачки по лесной земле
+	return maxf(continuous, _noise_pulse)
+
+
+## ВИДИМОСТЬ силуэта (0..1): база позы × (1 − укрытие). Движение наполовину срывает укрытие, поэтому
+## замерев в густых зарослях видимость ≈ 0. «Заметность» для будущего обнаружения врагами.
+func stealth_visibility() -> float:
+	var hv := Vector2(velocity.x, velocity.z).length()
+	var base := crouch_visibility if _crouching else stand_visibility
+	var conceal := _foliage_conceal()
+	if hv >= 0.2:
+		conceal *= move_conceal_penalty
+	return base * (1.0 - clampf(conceal, 0.0, 1.0))
 
 
 # Стоит ли ОТЛОЖИТЬ нажатие E (тап/удержание): только если налегке целимся в ЛЁГКОЕ бревно. Тогда тап
@@ -1019,6 +1210,8 @@ func _drive_barrow(delta: float) -> void:
 			var uphill := Vector3(-gn.x, 0.0, -gn.z)
 			if uphill.length() > 0.001 and (-bfwd).dot(uphill.normalized()) > 0.3:
 				spd *= 1.5
+	# Заросли тормозят и тачку (у неё свой режим хода, мимо walk_locomotion) — с грузом сильнее.
+	spd *= _foliage_for_movement()
 	# ВОРОТА ВВОДА ПО ПРОХОДИМОСТИ ИГРОКА (#barrow-block). Тачку ведёт игрок «руками»: если рукам
 	# некуда двигаться (в зазор перед игроком — barrow_arm_col — заехало препятствие), тачку туда
 	# вести нельзя. Иначе drive() жёстко выставлял тачке скорость и она уезжала/крутилась сама,
@@ -1198,6 +1391,7 @@ func _drop_carried() -> void:
 	var top := _carried_logs.pop_back() as FallingLog
 	_carry_total = maxf(0.0, _carry_total - top.get_weight())
 	top.drop(get_tree().current_scene, drop_pos, forward)
+	add_noise(throw_noise)  # глухой удар брошенного бревна о землю
 	_after_carry_removed()
 
 
@@ -1310,6 +1504,14 @@ func walk_locomotion(delta: float, speed_mult: float, can_run: bool,
 	if can_run and Input.is_action_pressed("run"):
 		speed *= run_multiplier
 	speed *= speed_mult
+	# Заросли тормозят поверх всего (ходьба/переноска/волок идут через эту воронку) — и скорость,
+	# и прыжок: в густых зарослях толком не разбежаться и не подпрыгнуть (см. velocity.y ниже).
+	# С грузом тормозит сильнее (см. _foliage_for_movement).
+	var foliage := _foliage_for_movement()
+	speed *= foliage
+	# Присяд медленнее (на прыжок не влияет — присев всё равно можно подскочить).
+	if _crouching:
+		speed *= crouch_speed_mult
 
 	if on_floor:
 		# На земле — мгновенная отзывчивость, прыжок.
@@ -1322,7 +1524,7 @@ func walk_locomotion(delta: float, speed_mult: float, can_run: bool,
 		# is_action_PRESSED (а не just_pressed): пока пробел зажат, прыжок повторяется
 		# сразу в первый кадр на земле — автопрыжок без паузы между прыжками (как в Minecraft).
 		if can_jump and Input.is_action_pressed("jump"):
-			velocity.y = _jump_velocity * jump_mult
+			velocity.y = _jump_velocity * jump_mult * foliage
 	else:
 		# В воздухе — ограниченное руление: инерция сохраняется, но подправить можно.
 		if direction:

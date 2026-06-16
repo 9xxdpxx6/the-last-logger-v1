@@ -133,7 +133,7 @@ current = true
 [node name="ChopRay" type="ShapeCast3D" parent="Camera3D" unique_id=907403564]
 shape = SubResource("ChopShape")
 target_position = Vector3(0, 0, -2.4)
-collision_mask = 36
+collision_mask = 100
 
 [node name="Axe" parent="Camera3D" instance=ExtResource("2_axe")]
 
@@ -164,6 +164,46 @@ value = 0.0
 show_percentage = false
 
 [node name="Label" type="Label" parent="HUD/QuotaBar"]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+text = ""
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="NoiseBar" type="ProgressBar" parent="HUD"]
+anchors_preset = 0
+offset_left = 16.0
+offset_top = 48.0
+offset_right = 256.0
+offset_bottom = 68.0
+max_value = 1.0
+value = 0.0
+show_percentage = false
+
+[node name="Label" type="Label" parent="HUD/NoiseBar"]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+text = ""
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="VisBar" type="ProgressBar" parent="HUD"]
+anchors_preset = 0
+offset_left = 16.0
+offset_top = 72.0
+offset_right = 256.0
+offset_bottom = 92.0
+max_value = 1.0
+value = 0.0
+show_percentage = false
+
+[node name="Label" type="Label" parent="HUD/VisBar"]
 layout_mode = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
